@@ -237,7 +237,10 @@ const UploadAttachmentManagerView: React.FC<UploadAttachmentManagerViewProps> = 
 										shape="round"
 										icon="EyeOutline"
 										size="large"
-										onClick={(): void => previewClick(file)}
+										onClick={(ev): void => {
+											ev.stopPropagation();
+											previewClick(file);
+										}}
 									/>
 								</Tooltip>
 							)}
