@@ -267,7 +267,7 @@ class RoomsApi implements IRoomsApi {
 					message.stanzaId
 				);
 				if (historyMessage) {
-					historyMessage.getElementsByTagName('body')[0].innerHTML = message.text;
+					historyMessage.getElementsByTagName('body')[0].textContent = message.text;
 					listOfMessages[message.stanzaId] = historyMessage.outerHTML;
 				}
 			})
