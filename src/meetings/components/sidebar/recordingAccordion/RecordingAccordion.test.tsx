@@ -47,8 +47,7 @@ beforeEach(() => {
 });
 
 describe('RecordingAccordion tests', () => {
-	// Skipped: Design system upgrade to 11.0.0-devel.5 introduced setState during Accordion rendering phase, causing React warnings
-	test.skip('Toggle accordion status', async () => {
+	test('Toggle accordion status', async () => {
 		const { user } = setup(<RecordingAccordion meetingId={meeting.id} />);
 		expect(screen.getByTestId(iconDown)).toBeVisible();
 
@@ -91,8 +90,7 @@ describe('RecordingAccordion tests', () => {
 		expect(spyOnStartRecording).toHaveBeenCalled();
 	});
 
-	// Skipped: Design system upgrade to 11.0.0-devel.5 introduced setState during Accordion rendering phase, causing React warnings
-	test.skip('Show a snackbar when the start recording request fails', async () => {
+	test('Show a snackbar when the start recording request fails', async () => {
 		const spyOnStartRecording = spyOnMeetingsApi(MeetingsApiToSpy.START_RECORDING);
 		const { user } = setup(<RecordingAccordion meetingId={meeting.id} />);
 
