@@ -58,22 +58,23 @@ describe('RecordingAccordion tests', () => {
 	});
 
 	test("User can only start the recording if it isn't already active", async () => {
-		setup(<RecordingAccordion meetingId={meeting.id} />);
-		const startButton = await screen.findByTestId('startRecordingButton');
+		const { user } = setup(<RecordingAccordion meetingId={meeting.id} />);
 
-		expect(startButton).toBeEnabled();
+		await user.click(screen.getByTestId(iconDown));
+
+		expect(screen.getByTestId('startRecordingButton')).toBeEnabled();
 	});
 
 	test("User can only stop the recording if it's already active", async () => {
-		setup(<RecordingAccordion meetingId={meeting.id} />);
+		const { user } = setup(<RecordingAccordion meetingId={meeting.id} />);
 
 		act(() => {
 			useStore.getState().startRecording(meeting.id, '32423423', 'user1');
 		});
 
-		const stopButton = await screen.findByTestId('stopRecordingButton');
+		await user.click(screen.getByTestId(iconDown));
 
-		expect(stopButton).toBeEnabled();
+		expect(screen.getByTestId('stopRecordingButton')).toBeEnabled();
 	});
 
 	test('When user clicks on the start button the recording starts', async () => {
