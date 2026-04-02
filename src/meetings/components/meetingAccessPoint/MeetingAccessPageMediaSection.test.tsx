@@ -64,6 +64,20 @@ beforeEach(() => {
 
 describe('MeetingAccessPageMediaSection tests', () => {
 	test('User does not give the media permissions', async () => {
+		vi.spyOn(navigator.mediaDevices, 'enumerateDevices').mockResolvedValue([
+			{
+				deviceId: 'audioDefault',
+				kind: 'audioinput',
+				label: '',
+				groupId: 'default'
+			} as MediaDeviceInfo,
+			{
+				deviceId: 'videoDefault',
+				kind: 'videoinput',
+				label: '',
+				groupId: 'default'
+			} as MediaDeviceInfo
+		]);
 		vi.spyOn(navigator.mediaDevices, 'getUserMedia').mockRejectedValue('error getUserMedia');
 		setup(
 			<MeetingAccessPageMediaSection

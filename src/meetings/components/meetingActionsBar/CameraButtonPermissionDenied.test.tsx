@@ -73,6 +73,9 @@ beforeEach(() => {
 });
 describe('Camera button - permission denied', () => {
 	test('User clicks on the button', async () => {
+		vi.spyOn(navigator.mediaDevices, 'enumerateDevices').mockResolvedValue([
+			{ deviceId: 'videoDefault', kind: 'videoinput', label: '', groupId: 'default' } as MediaDeviceInfo
+		]);
 		vi.spyOn(navigator.mediaDevices, 'getUserMedia').mockRejectedValue('error getUserMedia');
 
 		const err = vi.spyOn(console, 'error').mockImplementation(() => {});

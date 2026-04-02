@@ -67,11 +67,16 @@ export const useLocalMediaHandler = ({
 			freeMediaResources(streamTrack);
 			if (newStatus) {
 				const getStream = mediaType === 'audio' ? getAudioStream : getVideoStream;
-				getStream(newDeviceId).then((newStream: MediaStream) => {
-					setStreamTrack(newStream);
-					setStatus(newStatus);
-					setDeviceId(newDeviceId);
-				});
+				getStream(newDeviceId)
+					.then((newStream: MediaStream) => {
+						setStreamTrack(newStream);
+						setStatus(newStatus);
+						setDeviceId(newDeviceId);
+					})
+					.catch(() => {
+						setStreamTrack(null);
+						setStatus(false);
+					});
 			} else {
 				setStreamTrack(null);
 				setStatus(newStatus);

@@ -8,8 +8,6 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 
 import { filter } from 'lodash';
 
-import { BrowserUtils } from '../utils/BrowserUtils';
-
 const useMediaDevices = (
 	deviceType: 'audio' | 'video'
 ): {
@@ -54,13 +52,12 @@ const useMediaDevices = (
 			})
 			.then((stream) => {
 				stream.getTracks().forEach((track) => track.stop());
-				updateDevices();
 				setPermissionStatus('granted');
 			})
 			.catch(() => {
 				setPermissionStatus('denied');
 			});
-	}, [deviceType, updateDevices]);
+	}, [deviceType]);
 
 	useEffect(() => {
 		if (permissionStatus === 'prompt') {
@@ -69,26 +66,53 @@ const useMediaDevices = (
 	}, [permissionStatus, getUserMedia]);
 
 	useEffect(() => {
-		updateDevices();
-		if (navigator.permissions && !BrowserUtils.isFirefox()) {
-			const permissionName = deviceType === 'audio' ? 'microphone' : 'camera';
-			navigator.permissions
-				.query({ name: permissionName as PermissionName })
-				.then((state) => {
-					setPermissionStatus(state.state);
-					// eslint-disable-next-line no-param-reassign
-					state.onchange = (event: Event): void => {
-						// @ts-ignore
-						const permissionState = event.target?.state as PermissionState;
-						setPermissionStatus(permissionState);
-					};
-				})
-				.catch(() => {
+		const deviceKind = deviceType === 'audio' ? 'audioinput' : 'videoinput';
+		const permissionName = deviceType === 'audio' ? 'microphone' : 'camera';
+
+		// Enumerate devices first: if any device already has a label, the user has previously
+		// granted permission. This is the recommended cross-browser detection approach
+		// (https://www.webrtc-developers.com/managing-devices-in-webrtc/) because
+		// labels are only populated after permission is granted, even on Firefox.
+		navigator.mediaDevices
+			.enumerateDevices()
+			.then((devices) => {
+				const inputs = filter(devices, (device: MediaDeviceInfo) => device.kind === deviceKind);
+
+				if (inputs.some((device) => device.label !== '')) {
+					// Labels present: permission was already granted in a prior session.
+					setDeviceList(inputs);
+					setPermissionStatus('granted');
+					return;
+				}
+
+				// No labels yet — need to determine the current permission state.
+				// Try the Permissions API first (Chrome, Edge, Firefox 120+).
+				if (navigator.permissions) {
+					navigator.permissions
+						.query({ name: permissionName as PermissionName })
+						.then((state) => {
+							setPermissionStatus(state.state);
+							// eslint-disable-next-line no-param-reassign
+							state.onchange = (event: Event): void => {
+								// @ts-ignore
+								const permissionState = event.target?.state as PermissionState;
+								setPermissionStatus(permissionState);
+							};
+						})
+						.catch(() => {
+							// Permissions API is unsupported for this device type — fall back
+							// to getUserMedia() to trigger the browser permission prompt.
+							getUserMedia();
+						});
+				} else {
+					// No Permissions API support — trigger the browser permission prompt.
 					getUserMedia();
-				});
-		} else {
-			getUserMedia();
-		}
+				}
+			})
+			.catch(() => {
+				// enumerateDevices() failed — fall back to getUserMedia().
+				getUserMedia();
+			});
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, []);
 
@@ -96,7 +120,7 @@ const useMediaDevices = (
 
 	return {
 		deviceList,
-		permission: !noDevices ? permissionStatus : 'granted',
+		permission: permissionStatus,
 		noDevices
 	};
 };

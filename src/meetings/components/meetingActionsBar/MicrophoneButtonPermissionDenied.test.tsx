@@ -66,7 +66,9 @@ const defaultSetup = (): { user: UserEvent } => {
 
 describe('Microphone button - permission denied', () => {
 	test('User clicks on the button', async () => {
-		useStore.getState().setWebsocketStatus(true);
+		vi.spyOn(navigator.mediaDevices, 'enumerateDevices').mockResolvedValue([
+			{ deviceId: 'audioDefault', kind: 'audioinput', label: '', groupId: 'default' } as MediaDeviceInfo
+		]);
 		vi.spyOn(navigator.mediaDevices, 'getUserMedia').mockRejectedValue('error getUserMedia');
 
 		const err = vi.spyOn(console, 'error').mockImplementation(() => {});
