@@ -52,12 +52,14 @@ const useMediaDevices = (
 			})
 			.then((stream) => {
 				stream.getTracks().forEach((track) => track.stop());
+				// Re-enumerate to get device labels now that permission is granted.
+				updateDevices();
 				setPermissionStatus('granted');
 			})
 			.catch(() => {
 				setPermissionStatus('denied');
 			});
-	}, [deviceType]);
+	}, [deviceType, updateDevices]);
 
 	useEffect(() => {
 		if (permissionStatus === 'prompt') {
