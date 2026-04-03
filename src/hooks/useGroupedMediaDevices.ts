@@ -43,7 +43,7 @@ const useGroupedMediaDevices = (): UseGroupedMediaDevicesReturn => {
 				setGroups(nextGroups);
 			})
 			.catch((e) => {
-				console.log(e);
+				console.error('Failed to enumerate media devices:', e);
 			});
 	}, []);
 
@@ -63,7 +63,7 @@ const useGroupedMediaDevices = (): UseGroupedMediaDevicesReturn => {
 				setGroups(nextGroups);
 			})
 			.catch((e) => {
-				console.log(e);
+				console.error('Failed to update device groups on device change:', e);
 			});
 	}, []);
 
@@ -82,3 +82,4 @@ const useGroupedMediaDevices = (): UseGroupedMediaDevicesReturn => {
 };
 
 export default useGroupedMediaDevices;
+

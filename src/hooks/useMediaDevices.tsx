@@ -33,7 +33,7 @@ const useMediaDevices = (
 				setDeviceList(inputs);
 			})
 			.catch((e) => {
-				console.log(e);
+				console.error('Failed to enumerate media devices:', e);
 			});
 	}, [deviceType]);
 
@@ -43,13 +43,18 @@ const useMediaDevices = (
 			.enumerateDevices()
 			.then((devices) => {
 				const inputs = filter(devices, (device: MediaDeviceInfo) => device.kind === deviceKind);
-				const prevIds = new Set(prevDeviceListRef.current.map((d) => d.deviceId));
-				setNewDevices(inputs.filter((d) => !prevIds.has(d.deviceId)));
+				// Only compute new devices once the initial enumeration has populated the ref.
+				// If the ref is still empty (initial enumeration not yet complete), skip new-device
+				// detection to avoid marking existing devices as new.
+				if (prevDeviceListRef.current.length > 0) {
+					const prevIds = new Set(prevDeviceListRef.current.map((d) => d.deviceId));
+					setNewDevices(inputs.filter((d) => !prevIds.has(d.deviceId)));
+				}
 				prevDeviceListRef.current = inputs;
 				setDeviceList(inputs);
 			})
 			.catch((e) => {
-				console.log(e);
+				console.error('Failed to handle device change:', e);
 			});
 	}, [deviceType]);
 
