@@ -10,6 +10,7 @@ import React, {
 	useCallback,
 	useContext,
 	useEffect,
+	useMemo,
 	useRef,
 	useState
 } from 'react';
@@ -25,6 +26,7 @@ import MoreActionsButton from './MoreActionsButton';
 import RaiseHandButton from './RaiseHandButton';
 import ScreenShareButton from './ScreenShareButton';
 import useContainerDimensions from '../../../hooks/useContainerDimensions';
+import useGroupedMediaDevices from '../../../hooks/useGroupedMediaDevices';
 import { RouterContext } from '../../contexts/routerContext';
 
 const BarContainer = styled(Container)<{ $isHoovering: boolean }>`
@@ -69,6 +71,18 @@ const MeetingActionsBar = ({ streamsWrapperRef }: MeetingActionsProps): ReactEle
 	const rightActionsWrapperRef = useRef<HTMLDivElement>(null);
 
 	const timeout = useRef<NodeJS.Timeout>();
+
+	const { newGroups } = useGroupedMediaDevices();
+
+	const newGroupAudioDeviceId = useMemo(() => {
+		const firstNewGroup = newGroups.values().next().value;
+		return firstNewGroup?.audio?.deviceId;
+	}, [newGroups]);
+
+	const newGroupVideoDeviceId = useMemo(() => {
+		const firstNewGroup = newGroups.values().next().value;
+		return firstNewGroup?.video?.deviceId;
+	}, [newGroups]);
 
 	const handleClickOutsideAudioDropdown = useCallback((e: MouseEvent) => {
 		if (audioDropdownRef.current && !audioDropdownRef.current.contains(e.target as HTMLElement)) {
@@ -198,11 +212,13 @@ const MeetingActionsBar = ({ streamsWrapperRef }: MeetingActionsProps): ReactEle
 					isVideoListOpen={isVideoListOpen}
 					videoDropdownRef={videoDropdownRef}
 					setIsVideoListOpen={setIsVideoListOpen}
+					newGroupDeviceId={newGroupVideoDeviceId}
 				/>
 				<MicrophoneButton
 					audioDropdownRef={audioDropdownRef}
 					isAudioListOpen={isAudioListOpen}
 					setIsAudioListOpen={setIsAudioListOpen}
+					newGroupDeviceId={newGroupAudioDeviceId}
 				/>
 				<ScreenShareButton />
 				<RaiseHandButton />

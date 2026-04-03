@@ -15,6 +15,7 @@ import { MediaStatus } from './externalAccess/MeetingExternalAccessPage';
 import { MicTestButton } from './MicTestButton';
 import { useLocalMediaHandler } from './useLocalMediaHandler';
 import { MEETINGS_PATH } from '../../../constants/appConstants';
+import useGroupedMediaDevices from '../../../hooks/useGroupedMediaDevices';
 import useLocalStorage from '../../../hooks/useLocalStorage';
 import { getRoomIdByMeetingId } from '../../../store/selectors/MeetingSelectors';
 import { getRoomNameSelector } from '../../../store/selectors/RoomsSelectors';
@@ -100,6 +101,18 @@ const MeetingAccessPageMediaSection: FC<AccessMeetingPageMediaSectionProps> = ({
 	const videoStreamRef = useRef<HTMLVideoElement>(null);
 	const audioStreamRef = useRef<HTMLAudioElement>(null);
 
+	const { newGroups } = useGroupedMediaDevices();
+
+	const newGroupForceSwitchAudio = useMemo(() => {
+		const firstNewGroup = newGroups.values().next().value;
+		return firstNewGroup?.audio?.deviceId;
+	}, [newGroups]);
+
+	const newGroupForceSwitchVideo = useMemo(() => {
+		const firstNewGroup = newGroups.values().next().value;
+		return firstNewGroup?.video?.deviceId;
+	}, [newGroups]);
+
 	const {
 		status: videoStatus,
 		deviceId: videoDeviceId,
@@ -107,7 +120,9 @@ const MeetingAccessPageMediaSection: FC<AccessMeetingPageMediaSectionProps> = ({
 	} = useLocalMediaHandler({
 		mediaType: 'video',
 		initialStatus: meetingStorage.EnableCamera,
-		streamRef: videoStreamRef
+		streamRef: videoStreamRef,
+		initialDeviceId: meetingStorage.selectedVideoDeviceId,
+		forceSwitchDeviceId: newGroupForceSwitchVideo
 	});
 
 	const {
@@ -118,11 +133,18 @@ const MeetingAccessPageMediaSection: FC<AccessMeetingPageMediaSectionProps> = ({
 	} = useLocalMediaHandler({
 		mediaType: 'audio',
 		initialStatus: meetingStorage.EnableMicrophone,
-		streamRef: audioStreamRef
+		streamRef: audioStreamRef,
+		initialDeviceId: meetingStorage.selectedAudioDeviceId,
+		forceSwitchDeviceId: newGroupForceSwitchAudio
 	});
 
 	useEffect(() => {
-		setMeetingStorage({ EnableCamera: videoStatus, EnableMicrophone: audioStatus });
+		setMeetingStorage({
+			EnableCamera: videoStatus,
+			EnableMicrophone: audioStatus,
+			selectedVideoDeviceId: videoDeviceId,
+			selectedAudioDeviceId: audioDeviceId
+		});
 		setMediaStatus({
 			audio: { enabled: audioStatus, selectedDeviceId: audioDeviceId },
 			video: { enabled: videoStatus, selectedDeviceId: videoDeviceId }

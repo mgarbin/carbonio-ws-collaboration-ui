@@ -33,12 +33,14 @@ type CamButtonProps = {
 	videoDropdownRef: React.RefObject<HTMLDivElement>;
 	isVideoListOpen: boolean;
 	setIsVideoListOpen: Dispatch<SetStateAction<boolean>>;
+	newGroupDeviceId?: string;
 };
 
 const CameraButton = ({
 	videoDropdownRef,
 	isVideoListOpen,
-	setIsVideoListOpen
+	setIsVideoListOpen,
+	newGroupDeviceId
 }: CamButtonProps): ReactElement => {
 	const [t] = useTranslation();
 
@@ -65,13 +67,48 @@ const CameraButton = ({
 	const setLocalStreams = useStore((store) => store.setLocalStreams);
 	const websocketNetworkStatus = useStore(({ connections }) => connections.status.websocket);
 
-	const { permission, deviceList, noDevices } = useBrowserPermission('video');
+	const { permission, deviceList, newDevices, noDevices } = useBrowserPermission('video');
 
 	const [buttonStatus, setButtonStatus] = useState<boolean>(true);
 
 	useEffect(() => {
 		setButtonStatus(true);
 	}, [videoStatus]);
+
+	// Auto-switch to a newly plugged video device
+	// eslint-disable-next-line react-hooks/exhaustive-deps
+	useEffect(() => {
+		if (newDevices.length > 0) {
+			const newDevice = newDevices[0];
+			if (videoStatus) {
+				getVideoStream(newDevice.deviceId).then((stream) => {
+					videoOutConn?.updateLocalStreamTrack(stream).then(() => {
+						setLocalStreams(STREAM_TYPE.VIDEO, stream);
+						setSelectedDeviceId(STREAM_TYPE.VIDEO, newDevice.deviceId);
+					});
+				});
+			} else {
+				setSelectedDeviceId(STREAM_TYPE.VIDEO, newDevice.deviceId);
+			}
+		}
+	}, [newDevices]); // intentionally omit other deps to only react to actual new-device events
+
+	// Switch to the video device from a newly paired group (coordinated with audio switch in parent)
+	// eslint-disable-next-line react-hooks/exhaustive-deps
+	useEffect(() => {
+		if (newGroupDeviceId && newGroupDeviceId !== selectedVideoDeviceId) {
+			if (videoStatus) {
+				getVideoStream(newGroupDeviceId).then((stream) => {
+					videoOutConn?.updateLocalStreamTrack(stream).then(() => {
+						setLocalStreams(STREAM_TYPE.VIDEO, stream);
+						setSelectedDeviceId(STREAM_TYPE.VIDEO, newGroupDeviceId);
+					});
+				});
+			} else {
+				setSelectedDeviceId(STREAM_TYPE.VIDEO, newGroupDeviceId);
+			}
+		}
+	}, [newGroupDeviceId]); // intentionally omit other deps to only react to parent group changes
 
 	const onClickVideoItem = useCallback(
 		(videoItem: MediaDeviceInfo) => {
