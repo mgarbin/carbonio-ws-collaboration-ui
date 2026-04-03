@@ -20,6 +20,8 @@ export type NotificationsSettingsType = {
 export type MeetingStorageType = {
 	EnableMicrophone: boolean;
 	EnableCamera: boolean;
+	selectedAudioDeviceId?: string;
+	selectedVideoDeviceId?: string;
 };
 
 export type MeetingRecordingType = { name: string; id: string };

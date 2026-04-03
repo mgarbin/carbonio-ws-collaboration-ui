@@ -10,6 +10,7 @@ import React, {
 	SetStateAction,
 	useCallback,
 	useContext,
+	useEffect,
 	useMemo
 } from 'react';
 
@@ -32,12 +33,14 @@ type MicButtonProps = {
 	audioDropdownRef: React.RefObject<HTMLDivElement>;
 	isAudioListOpen: boolean;
 	setIsAudioListOpen: Dispatch<SetStateAction<boolean>>;
+	newGroupDeviceId?: string;
 };
 
 const MicrophoneButton = ({
 	audioDropdownRef,
 	isAudioListOpen,
-	setIsAudioListOpen
+	setIsAudioListOpen,
+	newGroupDeviceId
 }: MicButtonProps): ReactElement => {
 	const [t] = useTranslation();
 
@@ -61,7 +64,38 @@ const MicrophoneButton = ({
 	const bidirectionalAudioConn = useStore((store) => store.activeMeeting?.bidirectionalAudioConn);
 	const websocketNetworkStatus = useStore(({ connections }) => connections.status.websocket);
 
-	const { permission, deviceList, noDevices } = useMediaDevices('audio');
+	const { permission, deviceList, newDevices, noDevices } = useMediaDevices('audio');
+
+	// Auto-switch to a newly plugged audio device
+	// eslint-disable-next-line react-hooks/exhaustive-deps
+	useEffect(() => {
+		if (newDevices.length > 0) {
+			const newDevice = newDevices[0];
+			if (audioStatus) {
+				getAudioStream(newDevice.deviceId).then((stream) => {
+					bidirectionalAudioConn?.updateLocalStreamTrack(stream);
+					setSelectedDeviceId(STREAM_TYPE.AUDIO, newDevice.deviceId);
+				});
+			} else {
+				setSelectedDeviceId(STREAM_TYPE.AUDIO, newDevice.deviceId);
+			}
+		}
+	}, [newDevices]); // intentionally omit other deps to only react to actual new-device events
+
+	// Switch to the audio device from a newly paired group (coordinated with video switch in parent)
+	// eslint-disable-next-line react-hooks/exhaustive-deps
+	useEffect(() => {
+		if (newGroupDeviceId && newGroupDeviceId !== selectedAudioDeviceId) {
+			if (audioStatus) {
+				getAudioStream(newGroupDeviceId).then((stream) => {
+					bidirectionalAudioConn?.updateLocalStreamTrack(stream);
+					setSelectedDeviceId(STREAM_TYPE.AUDIO, newGroupDeviceId);
+				});
+			} else {
+				setSelectedDeviceId(STREAM_TYPE.AUDIO, newGroupDeviceId);
+			}
+		}
+	}, [newGroupDeviceId]); // intentionally omit other deps to only react to parent group changes
 
 	const onClickAudioItem = useCallback(
 		(audioItem: MediaDeviceInfo) => {

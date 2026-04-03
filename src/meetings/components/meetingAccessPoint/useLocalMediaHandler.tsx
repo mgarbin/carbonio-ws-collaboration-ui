@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 /* eslint-disable no-param-reassign */
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { Button, Container, Row, Select, Snackbar, Tooltip } from '@zextras/carbonio-design-system';
 import { find, map } from 'lodash';
@@ -18,6 +18,8 @@ type UseLocalMediaHandlerParams = {
 	mediaType: 'audio' | 'video';
 	initialStatus?: boolean;
 	streamRef?: React.RefObject<HTMLAudioElement | HTMLVideoElement>;
+	initialDeviceId?: string;
+	forceSwitchDeviceId?: string;
 };
 
 type UseLocalMediaHandlerReturn = {
@@ -30,7 +32,9 @@ type UseLocalMediaHandlerReturn = {
 export const useLocalMediaHandler = ({
 	mediaType,
 	initialStatus = false,
-	streamRef
+	streamRef,
+	initialDeviceId,
+	forceSwitchDeviceId
 }: UseLocalMediaHandlerParams): UseLocalMediaHandlerReturn => {
 	const [t] = useTranslation();
 	const disableMicLabel = t('meeting.interactions.disableMicrophone', 'Disable microphone');
@@ -45,12 +49,18 @@ export const useLocalMediaHandler = ({
 	);
 	const unknownDeviceLabel = t('meeting.interactions.unknownDevice', 'Unknown device');
 	const noDevicesLabel = t('meeting.interactions.noDevices', 'No devices available');
+	const previousDeviceUnavailableLabel = t(
+		'meeting.interactions.previousDeviceUnavailable',
+		'Your previous device is no longer available'
+	);
 
 	const [streamTrack, setStreamTrack] = useState<MediaStream | null>(null);
 	const [status, setStatus] = useState(initialStatus);
 	const [deviceId, setDeviceId] = useState<string | undefined>(undefined);
+	const [previousDeviceUnavailable, setPreviousDeviceUnavailable] = useState(false);
+	const initialSelectionDoneRef = useRef(false);
 
-	const { permission, deviceList, noDevices } = useBrowserPermission(mediaType);
+	const { permission, deviceList, newDevices, noDevices } = useBrowserPermission(mediaType);
 
 	useEffect(() => {
 		if (streamRef?.current) {
@@ -91,13 +101,22 @@ export const useLocalMediaHandler = ({
 		[unknownDeviceLabel, deviceList]
 	);
 
-	// Initially open the stream with default device if no device is selected
+	// On first device list population: restore initialDeviceId if available, otherwise use default
 	useEffect(() => {
-		if (!deviceId && mediaDeviceList[0]) {
+		if (!deviceId && mediaDeviceList.length > 0 && !initialSelectionDoneRef.current) {
+			initialSelectionDoneRef.current = true;
+			if (initialDeviceId) {
+				const found = find(mediaDeviceList, ['value', initialDeviceId]);
+				if (found) {
+					toggleStream(status, initialDeviceId);
+					return;
+				}
+				setPreviousDeviceUnavailable(true);
+			}
 			const defaultDevice = find(mediaDeviceList, ['value', 'default']) ?? mediaDeviceList[0];
 			toggleStream(status, defaultDevice.value);
 		}
-	}, [mediaDeviceList, deviceId, toggleStream, status]);
+	}, [mediaDeviceList, deviceId, toggleStream, status, initialDeviceId]);
 
 	useEffect(
 		() => () => {
@@ -111,6 +130,22 @@ export const useLocalMediaHandler = ({
 			toggleStream(false, undefined);
 		}
 	}, [permission, status, toggleStream]);
+
+	// Auto-switch to a newly plugged device
+	// eslint-disable-next-line react-hooks/exhaustive-deps
+	useEffect(() => {
+		if (newDevices.length > 0) {
+			toggleStream(status, newDevices[0].deviceId);
+		}
+	}, [newDevices]); // intentionally omit status/toggleStream to only react to actual new-device events
+
+	// Switch to an externally requested device (e.g. group-based coordination from parent)
+	// eslint-disable-next-line react-hooks/exhaustive-deps
+	useEffect(() => {
+		if (forceSwitchDeviceId && forceSwitchDeviceId !== deviceId) {
+			toggleStream(status, forceSwitchDeviceId);
+		}
+	}, [forceSwitchDeviceId]); // intentionally omit status/toggleStream/deviceId to only react to parent changes
 
 	const onChangeSource = useCallback(
 		(newDeviceId: string | null) => {
@@ -199,6 +234,15 @@ export const useLocalMediaHandler = ({
 						hideButton
 					/>
 				)}
+				{previousDeviceUnavailable && permission === 'granted' && (
+					<Snackbar
+						open={previousDeviceUnavailable}
+						autoHideTimeout={5000}
+						severity="warning"
+						label={previousDeviceUnavailableLabel}
+						onClose={() => setPreviousDeviceUnavailable(false)}
+					/>
+				)}
 			</Container>
 		),
 		[
@@ -213,7 +257,9 @@ export const useLocalMediaHandler = ({
 			giveMediaPermissionSnackbar,
 			toggleStream,
 			status,
-			deviceId
+			deviceId,
+			previousDeviceUnavailable,
+			previousDeviceUnavailableLabel
 		]
 	);
 
@@ -224,3 +270,4 @@ export const useLocalMediaHandler = ({
 		streamTrack
 	};
 };
+
