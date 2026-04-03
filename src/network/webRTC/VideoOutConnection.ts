@@ -51,7 +51,15 @@ export default class VideoOutConnection implements IVideoOutConnection {
 	}
 
 	public stopVideo(): void {
-		this.closePeerConnection();
+		// Mute the outgoing track without tearing down the peer connection.
+		// Keeping the connection alive avoids a full ICE/DTLS renegotiation on the
+		// next startVideo() call, which fixes a grey-screen bug on Firefox caused by
+		// renegotiation emitting ontrack events with an empty ev.streams array.
+		if (this.rtpSender) {
+			this.rtpSender.replaceTrack(null).catch((reason) => console.warn(reason));
+		}
+		useStore.getState().removeLocalStreams(STREAM_TYPE.VIDEO);
+		useStore.getState().removeBackgroundStream();
 		MeetingsApi.updateMediaOffer(this.meetingId, STREAM_TYPE.VIDEO, false);
 	}
 
@@ -83,7 +91,7 @@ export default class VideoOutConnection implements IVideoOutConnection {
 		}
 	};
 
-	// Stop the old track and add the new one without a new renegotiation
+	// Replace the outgoing video track without triggering a new SDP negotiation.
 	public updateLocalStreamTrack(
 		mediaStreamTrack: MediaStream,
 		isVirtualBackground?: boolean
@@ -96,13 +104,12 @@ export default class VideoOutConnection implements IVideoOutConnection {
 						videoTrack,
 						mediaStreamTrack ?? new MediaStream()
 					);
-				} else if (this.rtpSender?.track) {
-					if (isVirtualBackground) {
-						this.rtpSender.replaceTrack(videoTrack).catch((reason) => console.warn(reason));
-					} else {
-						this.rtpSender.track.stop();
-						this.rtpSender.replaceTrack(videoTrack).catch((reason) => console.warn(reason));
-					}
+				} else {
+					// replaceTrack works whether the current sender track is active or null
+					// (null occurs after stopVideo() muted the sender with replaceTrack(null)).
+					// Calling track.stop() before replaceTrack() is not needed and can cause
+					// a race condition in Firefox that leaves the remote side with a grey screen.
+					this.rtpSender.replaceTrack(videoTrack).catch((reason) => console.warn(reason));
 				}
 			}
 			resolve(videoTrack);

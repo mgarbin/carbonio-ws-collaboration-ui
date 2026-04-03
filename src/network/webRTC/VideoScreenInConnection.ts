@@ -78,7 +78,7 @@ export default class VideoScreenInConnection implements IVideoScreenInConnection
 	private onTrack = (ev: RTCTrackEvent): void => {
 		forEach(ev.streams, (stream) => {
 			const userId = stream.id.split('/')[0];
-			const type = stream.id.split('/')[1].toLowerCase() as STREAM_TYPE;
+			const type = stream.id.split('/')[1]?.toLowerCase() as STREAM_TYPE;
 			if (userId && type) {
 				const streamsKey = `${userId}-${type}`;
 				this.streamsMap[streamsKey] = {
@@ -87,6 +87,15 @@ export default class VideoScreenInConnection implements IVideoScreenInConnection
 				};
 			}
 		});
+
+		// Firefox may deliver ontrack with an empty ev.streams array during renegotiation
+		// (e.g. when the remote peer toggles their webcam and a new peer connection is
+		// created). Attaching an onunmute listener ensures the store is refreshed once
+		// the track actually begins delivering frames, avoiding a permanent grey screen.
+		ev.track.onunmute = (): void => {
+			this.updateStreams();
+		};
+
 		this.updateStreams();
 	};
 
