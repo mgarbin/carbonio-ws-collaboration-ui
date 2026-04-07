@@ -23,7 +23,8 @@ export default class VideoScreenInConnection implements IVideoScreenInConnection
 
 	streamsMap: StreamMap;
 
-	private originalInboundEncodings: RTCRtpEncodingParameters[] | null = null;
+	private originalInboundEncodings: WeakMap<RTCRtpReceiver, RTCRtpEncodingParameters[]> =
+		new WeakMap();
 
 	constructor(meetingId: string) {
 		this.peerConn = new RTCPeerConnection(new PeerConnConfig().getConfig());
@@ -110,8 +111,6 @@ export default class VideoScreenInConnection implements IVideoScreenInConnection
 	}
 
 	public async setInboundQuality(level: NetworkQualityLevel): Promise<void> {
-		if (level === NetworkQualityLevel.GOOD && this.originalInboundEncodings === null) return;
-
 		const videoReceivers = this.peerConn
 			.getReceivers()
 			.filter((r) => r.track?.kind === 'video');
@@ -132,16 +131,23 @@ export default class VideoScreenInConnection implements IVideoScreenInConnection
 					params.encodings = [{}];
 				}
 
-				if (this.originalInboundEncodings === null) {
-					this.originalInboundEncodings = params.encodings.map((enc) => ({ ...enc }));
+				// Save original encodings per receiver before any reduction
+				if (!this.originalInboundEncodings.has(receiver)) {
+					if (level === NetworkQualityLevel.GOOD) return; // nothing to restore
+					this.originalInboundEncodings.set(
+						receiver,
+						params.encodings.map((enc) => ({ ...enc }))
+					);
 				}
 
+				const original = this.originalInboundEncodings.get(receiver)!;
+
 				if (level === NetworkQualityLevel.GOOD) {
-					params.encodings = this.originalInboundEncodings.map((enc) => ({ ...enc }));
+					params.encodings = original.map((enc) => ({ ...enc }));
 				} else if (level === NetworkQualityLevel.FAIR) {
-					params.encodings = params.encodings.map((enc) => ({ ...enc, maxBitrate: 20_000 })); // bps
+					params.encodings = original.map((enc) => ({ ...enc, maxBitrate: 20_000 })); // bps
 				} else if (level === NetworkQualityLevel.POOR) {
-					params.encodings = params.encodings.map((enc) => ({ ...enc, maxBitrate: 10_000 })); // bps
+					params.encodings = original.map((enc) => ({ ...enc, maxBitrate: 10_000 })); // bps
 				} else {
 					return;
 				}
