@@ -11,7 +11,7 @@ import SubscriptionsManager from './SubscriptionsManager';
 import useStore from '../../store/Store';
 import { StreamInfo, StreamMap } from '../../types/network/models/meetingBeTypes';
 import { IVideoScreenInConnection } from '../../types/network/webRTC/webRTC';
-import { STREAM_TYPE, StreamsSubscriptionMap } from '../../types/store/ActiveMeetingTypes';
+import { NetworkQualityLevel, STREAM_TYPE, StreamsSubscriptionMap } from '../../types/store/ActiveMeetingTypes';
 import { MeetingsApi } from '../index';
 
 export default class VideoScreenInConnection implements IVideoScreenInConnection {
@@ -22,6 +22,8 @@ export default class VideoScreenInConnection implements IVideoScreenInConnection
 	subscriptionManager?: SubscriptionsManager;
 
 	streamsMap: StreamMap;
+
+	private originalInboundEncodings: RTCRtpEncodingParameters[] | null = null;
 
 	constructor(meetingId: string) {
 		this.peerConn = new RTCPeerConnection(new PeerConnConfig().getConfig());
@@ -105,5 +107,47 @@ export default class VideoScreenInConnection implements IVideoScreenInConnection
 	public closePeerConnection(): void {
 		delete this.subscriptionManager;
 		this.peerConn?.close?.();
+	}
+
+	public async setInboundQuality(level: NetworkQualityLevel): Promise<void> {
+		if (level === NetworkQualityLevel.GOOD && this.originalInboundEncodings === null) return;
+
+		const videoReceivers = this.peerConn
+			.getReceivers()
+			.filter((r) => r.track?.kind === 'video');
+		if (videoReceivers.length === 0) return;
+
+		await Promise.all(
+			videoReceivers.map(async (receiver) => {
+				// RTCRtpReceiver.setParameters is not in standard TS types but is supported in
+				// modern browsers; cast to attempt best-effort bandwidth reduction.
+				const receiverWithParams = receiver as unknown as {
+					getParameters: () => RTCRtpSendParameters;
+					setParameters: (params: RTCRtpSendParameters) => Promise<void>;
+				};
+				if (typeof receiverWithParams.setParameters !== 'function') return;
+
+				const params = receiverWithParams.getParameters();
+				if (!params.encodings || params.encodings.length === 0) {
+					params.encodings = [{}];
+				}
+
+				if (this.originalInboundEncodings === null) {
+					this.originalInboundEncodings = params.encodings.map((enc) => ({ ...enc }));
+				}
+
+				if (level === NetworkQualityLevel.GOOD) {
+					params.encodings = this.originalInboundEncodings.map((enc) => ({ ...enc }));
+				} else if (level === NetworkQualityLevel.FAIR) {
+					params.encodings = params.encodings.map((enc) => ({ ...enc, maxBitrate: 20_000 })); // bps
+				} else if (level === NetworkQualityLevel.POOR) {
+					params.encodings = params.encodings.map((enc) => ({ ...enc, maxBitrate: 10_000 })); // bps
+				} else {
+					return;
+				}
+
+				await receiverWithParams.setParameters(params);
+			})
+		);
 	}
 }

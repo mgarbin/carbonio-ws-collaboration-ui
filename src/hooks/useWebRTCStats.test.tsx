@@ -94,6 +94,7 @@ describe('useWebRTCStats hook', () => {
 	let mockSetParameters: ReturnType<typeof vi.fn>;
 	let mockGetParameters: ReturnType<typeof vi.fn>;
 	let mockAddTrack: ReturnType<typeof vi.fn>;
+	let mockGetReceivers: ReturnType<typeof vi.fn>;
 
 	beforeEach(() => {
 		mockGetStats = vi.fn(() =>
@@ -115,6 +116,7 @@ describe('useWebRTCStats hook', () => {
 			getParameters: mockGetParameters,
 			setParameters: mockSetParameters
 		}));
+		mockGetReceivers = vi.fn(() => []);
 
 		// window.RTCPeerConnection is already a vi.fn() defined in setupTests.ts.
 		// We use mockImplementation to inject getStats into every new instance that
@@ -128,7 +130,8 @@ describe('useWebRTCStats hook', () => {
 				createAnswer: vi.fn(() => Promise.resolve({ sdp: '', type: 'answer' })),
 				setRemoteDescription: vi.fn(() => Promise.resolve()),
 				setLocalDescription: vi.fn(() => Promise.resolve()),
-				getStats: mockGetStats
+				getStats: mockGetStats,
+				getReceivers: mockGetReceivers
 			} as unknown as RTCPeerConnection;
 		});
 
@@ -425,5 +428,84 @@ describe('useWebRTCStats hook', () => {
 		// 164ms < 300 and 0.024 < 0.05 => FAIR
 		const stats = useStore.getState().activeMeeting?.networkStats;
 		expect(stats?.quality).toBe(NetworkQualityLevel.FAIR);
+	});
+
+	test('applies POOR quality settings to screen out connection when quality is POOR', async () => {
+		mockGetStats.mockImplementation(() =>
+			makeStatsMock([
+				{
+					type: 'remote-inbound-rtp',
+					kind: 'audio',
+					roundTripTime: 0.5,
+					fractionLost: 0.08,
+					id: 'rtp-audio',
+					timestamp: Date.now()
+				} as unknown as RTCStats
+			])
+		);
+
+		// Start screen share so the screenOutConn rtpSender is initialised
+		Object.defineProperty(navigator.mediaDevices, 'getDisplayMedia', {
+			value: vi.fn(() =>
+				Promise.resolve({
+					getVideoTracks: vi.fn(() => [
+						{ onended: null, stop: vi.fn(), kind: 'video' } as unknown as MediaStreamTrack
+					])
+				})
+			),
+			configurable: true
+		});
+
+		useStore.getState().activeMeeting?.screenOutConn.startScreenShare();
+		await act(async () => {});
+
+		renderHook(() => useWebRTCStats(meeting.id));
+
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(4000);
+		});
+
+		expect(mockSetParameters).toHaveBeenCalled();
+		const screenCall = mockSetParameters.mock.calls.find(
+			([params]) => params.encodings?.[0]?.scaleResolutionDownBy === 5
+		);
+		expect(screenCall).toBeDefined();
+	});
+
+	test('applies quality settings to inbound video receivers when quality changes', async () => {
+		mockGetStats.mockImplementation(() =>
+			makeStatsMock([
+				{
+					type: 'remote-inbound-rtp',
+					kind: 'audio',
+					roundTripTime: 0.5,
+					fractionLost: 0.08,
+					id: 'rtp-audio',
+					timestamp: Date.now()
+				} as unknown as RTCStats
+			])
+		);
+
+		const mockReceiverSetParameters: ReturnType<typeof vi.fn> = vi.fn(() => Promise.resolve());
+		const mockReceiverGetParameters: ReturnType<typeof vi.fn> = vi.fn(() => ({ encodings: [{}] }));
+		mockGetReceivers.mockReturnValue([
+			{
+				track: { kind: 'video' },
+				getParameters: mockReceiverGetParameters,
+				setParameters: mockReceiverSetParameters
+			}
+		]);
+
+		renderHook(() => useWebRTCStats(meeting.id));
+
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(4000);
+		});
+
+		expect(mockReceiverSetParameters).toHaveBeenCalled();
+		const poorCall = mockReceiverSetParameters.mock.calls.find(
+			([params]) => params.encodings?.[0]?.maxBitrate === 10_000
+		);
+		expect(poorCall).toBeDefined();
 	});
 });

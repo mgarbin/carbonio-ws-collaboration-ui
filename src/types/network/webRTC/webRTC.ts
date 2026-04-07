@@ -52,6 +52,7 @@ export interface IScreenOutConnection extends IPeerConnection {
 	startScreenShare(): void;
 	handleRemoteAnswer(remoteAnswer: RTCSessionDescriptionInit): void;
 	stopScreenShare(): void;
+	setOutboundQuality(level: NetworkQualityLevel): Promise<void>;
 }
 
 export interface IVideoScreenInConnection extends IPeerConnection {
@@ -59,4 +60,5 @@ export interface IVideoScreenInConnection extends IPeerConnection {
 	handleRemoteOffer(sdp: string): void;
 	handleParticipantsSubscribed(streamsMap: StreamInfo[]): void;
 	removeStream(streamKey: string, streamType: STREAM_TYPE[]): void;
+	setInboundQuality(level: NetworkQualityLevel): Promise<void>;
 }
