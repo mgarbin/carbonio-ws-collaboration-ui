@@ -42,6 +42,7 @@ export default class VideoScreenInConnection implements IVideoScreenInConnection
 			.setRemoteDescription(offer)
 			.then(() => {
 				this.peerConn.getTransceivers().forEach((transceiver) => {
+					if (!RTCRtpReceiver.getCapabilities) return;
 					const caps = RTCRtpReceiver.getCapabilities('video');
 					if (caps) {
 						const preferred = caps.codecs.filter(
@@ -135,16 +136,13 @@ export default class VideoScreenInConnection implements IVideoScreenInConnection
 
 	public setInboundQuality(level: NetworkQualityLevel): void {
 		if (!this.subscriptionManager) return;
-		let layer: string;
-		if (level === NetworkQualityLevel.GOOD) {
-			layer = 'L3T3';
-		} else if (level === NetworkQualityLevel.FAIR) {
-			layer = 'L2T2';
-		} else if (level === NetworkQualityLevel.POOR) {
-			layer = 'L1T1';
-		} else {
-			return;
-		}
+		const layerByQuality: Partial<Record<NetworkQualityLevel, string>> = {
+			[NetworkQualityLevel.GOOD]: 'L3T3',
+			[NetworkQualityLevel.FAIR]: 'L2T2',
+			[NetworkQualityLevel.POOR]: 'L1T1'
+		};
+		const layer = layerByQuality[level];
+		if (!layer) return;
 		const updated = this.subscriptionManager.subscriptions.map((sub) => ({ ...sub, layer }));
 		this.subscriptionManager.updateSubscription(updated);
 	}
