@@ -8,7 +8,7 @@ import { concat, differenceWith, filter, find, forEach, isEqual, remove, size } 
 
 import PendingSubscriptionManager from './PendingSubscriptionManager';
 import useStore from '../../store/Store';
-import { STREAM_TYPE, Subscription } from '../../types/store/ActiveMeetingTypes';
+import { NetworkQualityLevel, STREAM_TYPE, Subscription } from '../../types/store/ActiveMeetingTypes';
 import { MeetingsApi } from '../index';
 
 class SubscriptionsManager {
@@ -19,6 +19,8 @@ class SubscriptionsManager {
 	subscriptions: Subscription[] = [];
 
 	pendingSubscription: PendingSubscriptionManager;
+
+	currentSpatialLayer: 0 | 1 | 2 = 2;
 
 	constructor(meetingId: string) {
 		this.meetingId = meetingId;
@@ -110,6 +112,25 @@ class SubscriptionsManager {
 				this.subscribeToMedia(subToAdd, subToRemove);
 			}
 		}
+	}
+
+	public setInboundQuality(level: NetworkQualityLevel): void {
+		const spatialLayer: 0 | 1 | 2 =
+			level === NetworkQualityLevel.POOR ? 0 : level === NetworkQualityLevel.FAIR ? 1 : 2;
+
+		if (spatialLayer === this.currentSpatialLayer) return;
+		this.currentSpatialLayer = spatialLayer;
+
+		if (this.subscriptions.length === 0) return;
+
+		const subsWithLayer = this.subscriptions.map((sub) => ({
+			...sub,
+			spatial_layer: spatialLayer
+		}));
+
+		MeetingsApi.subscribeToMedia(this.meetingId, subsWithLayer, []).catch((err) =>
+			console.warn('Failed to update SVC spatial layer', err)
+		);
 	}
 
 	public clean(): void {

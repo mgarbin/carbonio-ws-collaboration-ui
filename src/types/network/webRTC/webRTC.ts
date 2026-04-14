@@ -60,4 +60,5 @@ export interface IVideoScreenInConnection extends IPeerConnection {
 	handleRemoteOffer(sdp: string): void;
 	handleParticipantsSubscribed(streamsMap: StreamInfo[]): void;
 	removeStream(streamKey: string, streamType: STREAM_TYPE[]): void;
+	setInboundQuality(level: NetworkQualityLevel): void;
 }

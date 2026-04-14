@@ -119,6 +119,7 @@ const useWebRTCStats = (meetingId: string): void => {
 							currentMeeting?.screenOutConn
 								?.setOutboundQuality(quality)
 								.catch((err) => console.warn('Failed to set screen outbound quality', err));
+							currentMeeting?.videoScreenIn?.setInboundQuality(quality);
 						}
 					}
 				})

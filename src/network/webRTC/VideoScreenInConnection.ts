@@ -11,7 +11,7 @@ import SubscriptionsManager from './SubscriptionsManager';
 import useStore from '../../store/Store';
 import { StreamInfo, StreamMap } from '../../types/network/models/meetingBeTypes';
 import { IVideoScreenInConnection } from '../../types/network/webRTC/webRTC';
-import { STREAM_TYPE, StreamsSubscriptionMap } from '../../types/store/ActiveMeetingTypes';
+import { NetworkQualityLevel, STREAM_TYPE, StreamsSubscriptionMap } from '../../types/store/ActiveMeetingTypes';
 import { MeetingsApi } from '../index';
 
 export default class VideoScreenInConnection implements IVideoScreenInConnection {
@@ -100,6 +100,10 @@ export default class VideoScreenInConnection implements IVideoScreenInConnection
 			(stream) => `${stream.userId}-${stream.type}`
 		) as StreamsSubscriptionMap;
 		useStore.getState().setSubscribedTracks(this.meetingId, newStreams);
+	}
+
+	public setInboundQuality(level: NetworkQualityLevel): void {
+		this.subscriptionManager?.setInboundQuality(level);
 	}
 
 	public closePeerConnection(): void {

@@ -294,6 +294,33 @@ describe('useWebRTCStats hook', () => {
 		expect(mockSetScreenQuality).toHaveBeenCalledWith(NetworkQualityLevel.POOR);
 	});
 
+	test('calls setInboundQuality on videoScreenIn when quality changes', async () => {
+		mockGetStats.mockImplementation(() =>
+			makeStatsMock([
+				{
+					type: 'remote-inbound-rtp',
+					kind: 'audio',
+					roundTripTime: 0.5,
+					fractionLost: 0.08,
+					id: 'rtp-audio',
+					timestamp: Date.now()
+				} as unknown as RTCStats
+			])
+		);
+
+		const store = useStore.getState();
+		const videoScreenIn = store.activeMeeting?.videoScreenIn;
+		const mockSetInboundQuality = vi.spyOn(videoScreenIn!, 'setInboundQuality');
+
+		renderHook(() => useWebRTCStats(meeting.id));
+
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(4000);
+		});
+
+		expect(mockSetInboundQuality).toHaveBeenCalledWith(NetworkQualityLevel.POOR);
+	});
+
 	test('applies FAIR quality settings (maxBitrate 20_000, scaleResolutionDownBy 2 for video) when quality is FAIR', async () => {
 		mockGetStats.mockImplementation(() =>
 			makeStatsMock([

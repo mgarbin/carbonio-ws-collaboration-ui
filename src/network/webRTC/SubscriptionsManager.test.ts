@@ -20,7 +20,7 @@ import { MeetingBe, MeetingParticipantBe } from '../../types/network/models/meet
 import { RoomBe, RoomType } from '../../types/network/models/roomBeTypes';
 import { WsEventType } from '../../types/network/websocket/wsEvents';
 import { MeetingMediaStreamChangedEvent } from '../../types/network/websocket/wsMeetingEvents';
-import { STREAM_TYPE } from '../../types/store/ActiveMeetingTypes';
+import { STREAM_TYPE, NetworkQualityLevel } from '../../types/store/ActiveMeetingTypes';
 import { User } from '../../types/store/UserTypes';
 import { mockFetchAPI } from '../../utils/__mocks__/FetchUtils';
 import { wsEventsHandler } from '../websocket/wsEventsHandler';
@@ -211,6 +211,71 @@ describe('Test SubscriptionsManager', () => {
 
 		expect(mockFetchAPI).toHaveBeenCalledWith(subscribeUrl, RequestType.PUT, {
 			subscribe: [{ userId: 'user5', type: STREAM_TYPE.VIDEO }],
+			unsubscribe: []
+		});
+	});
+});
+
+describe('SVC inbound quality (setInboundQuality)', () => {
+	test('sends current subscriptions with spatial_layer 0 when quality is POOR', () => {
+		const subscriptionsManager = new SubscriptionsManager(groupMeeting.id);
+		subscriptionsManager.subscriptions = [
+			{ userId: 'user2', type: STREAM_TYPE.VIDEO },
+			{ userId: 'user2', type: STREAM_TYPE.SCREEN }
+		];
+
+		subscriptionsManager.setInboundQuality(NetworkQualityLevel.POOR);
+
+		expect(mockFetchAPI).toHaveBeenCalledWith(subscribeUrl, RequestType.PUT, {
+			subscribe: [
+				{ userId: 'user2', type: STREAM_TYPE.VIDEO, spatial_layer: 0 },
+				{ userId: 'user2', type: STREAM_TYPE.SCREEN, spatial_layer: 0 }
+			],
+			unsubscribe: []
+		});
+	});
+
+	test('sends current subscriptions with spatial_layer 1 when quality is FAIR', () => {
+		const subscriptionsManager = new SubscriptionsManager(groupMeeting.id);
+		subscriptionsManager.subscriptions = [{ userId: 'user3', type: STREAM_TYPE.VIDEO }];
+
+		subscriptionsManager.setInboundQuality(NetworkQualityLevel.FAIR);
+
+		expect(mockFetchAPI).toHaveBeenCalledWith(subscribeUrl, RequestType.PUT, {
+			subscribe: [{ userId: 'user3', type: STREAM_TYPE.VIDEO, spatial_layer: 1 }],
+			unsubscribe: []
+		});
+	});
+
+	test('does not call API when spatial layer has not changed', () => {
+		const subscriptionsManager = new SubscriptionsManager(groupMeeting.id);
+		subscriptionsManager.subscriptions = [{ userId: 'user2', type: STREAM_TYPE.VIDEO }];
+
+		// Default currentSpatialLayer is 2 (GOOD), calling GOOD again is a no-op
+		subscriptionsManager.setInboundQuality(NetworkQualityLevel.GOOD);
+
+		expect(mockFetchAPI).not.toHaveBeenCalled();
+	});
+
+	test('does not call API when there are no active subscriptions', () => {
+		const subscriptionsManager = new SubscriptionsManager(groupMeeting.id);
+
+		subscriptionsManager.setInboundQuality(NetworkQualityLevel.POOR);
+
+		expect(mockFetchAPI).not.toHaveBeenCalled();
+	});
+
+	test('restores spatial_layer 2 when quality recovers to GOOD after being POOR', () => {
+		const subscriptionsManager = new SubscriptionsManager(groupMeeting.id);
+		subscriptionsManager.subscriptions = [{ userId: 'user2', type: STREAM_TYPE.VIDEO }];
+
+		subscriptionsManager.setInboundQuality(NetworkQualityLevel.POOR);
+		mockFetchAPI.mockClear();
+
+		subscriptionsManager.setInboundQuality(NetworkQualityLevel.GOOD);
+
+		expect(mockFetchAPI).toHaveBeenCalledWith(subscribeUrl, RequestType.PUT, {
+			subscribe: [{ userId: 'user2', type: STREAM_TYPE.VIDEO, spatial_layer: 2 }],
 			unsubscribe: []
 		});
 	});
