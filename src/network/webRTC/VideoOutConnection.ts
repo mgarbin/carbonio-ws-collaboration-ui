@@ -8,6 +8,7 @@ import { PeerConnConfig } from './PeerConnConfig';
 import useStore from '../../store/Store';
 import { IVideoOutConnection } from '../../types/network/webRTC/webRTC';
 import { NetworkQualityLevel, STREAM_TYPE } from '../../types/store/ActiveMeetingTypes';
+import { isSvcSupported, VIDEO_SVC_MODE } from '../../utils/SvcUtils';
 import { getVideoStream } from '../../utils/UserMediaManager';
 import MeetingsApi from '../apis/MeetingsApi';
 
@@ -19,6 +20,8 @@ export default class VideoOutConnection implements IVideoOutConnection {
 	rtpSender: RTCRtpSender | null;
 
 	selectedVideoDeviceId: string | undefined;
+
+	private svcEnabled: boolean = false;
 
 	private originalEncodings: RTCRtpEncodingParameters[] | null = null;
 
@@ -94,10 +97,25 @@ export default class VideoOutConnection implements IVideoOutConnection {
 			const videoTrack: MediaStreamTrack = mediaStreamTrack.getVideoTracks()[0];
 			if (this.peerConn) {
 				if (this.rtpSender == null) {
-					this.rtpSender = this.peerConn?.addTrack(
-						videoTrack,
-						mediaStreamTrack ?? new MediaStream()
-					);
+					if (isSvcSupported(VIDEO_SVC_MODE)) {
+						// Use addTransceiver so we can set scalabilityMode at track-creation time.
+						// scalabilityMode cannot be changed later via setParameters(), so this is
+						// the only opportunity to enable SVC.
+						// The cast is required because scalabilityMode is not yet in all
+						// TypeScript DOM lib versions.
+						const transceiver = this.peerConn.addTransceiver(videoTrack, {
+							direction: 'sendonly',
+							sendEncodings: [{ scalabilityMode: VIDEO_SVC_MODE } as RTCRtpEncodingParameters],
+							streams: [mediaStreamTrack]
+						});
+						this.rtpSender = transceiver.sender;
+						this.svcEnabled = true;
+					} else {
+						this.rtpSender = this.peerConn?.addTrack(
+							videoTrack,
+							mediaStreamTrack ?? new MediaStream()
+						);
+					}
 				} else if (this.rtpSender?.track) {
 					if (isVirtualBackground) {
 						this.rtpSender.replaceTrack(videoTrack).catch((reason) => console.warn(reason));
@@ -134,10 +152,17 @@ export default class VideoOutConnection implements IVideoOutConnection {
 		this.peerConn?.close();
 		this.rtpSender = null;
 		this.peerConn = null;
+		this.svcEnabled = false;
 		this.originalEncodings = null;
 	}
 
 	public async setOutboundQuality(level: NetworkQualityLevel): Promise<void> {
+		// When SVC is active the SFU selectively forwards the appropriate spatial/
+		// temporal layer to each subscriber.  Manipulating the sender's encoding
+		// parameters (maxBitrate, scaleResolutionDownBy) would interfere with the
+		// SVC stream and is therefore skipped.
+		if (this.svcEnabled) return;
+
 		if (!this.rtpSender) return;
 		const params = this.rtpSender.getParameters();
 		if (!params.encodings || params.encodings.length === 0) {
