@@ -11,7 +11,11 @@ import SubscriptionsManager from './SubscriptionsManager';
 import useStore from '../../store/Store';
 import { StreamInfo, StreamMap } from '../../types/network/models/meetingBeTypes';
 import { IVideoScreenInConnection } from '../../types/network/webRTC/webRTC';
-import { STREAM_TYPE, StreamsSubscriptionMap } from '../../types/store/ActiveMeetingTypes';
+import {
+	STREAM_TYPE,
+	StreamsSubscriptionMap,
+	NetworkQualityLevel
+} from '../../types/store/ActiveMeetingTypes';
 import { MeetingsApi } from '../index';
 
 export default class VideoScreenInConnection implements IVideoScreenInConnection {
@@ -37,6 +41,23 @@ export default class VideoScreenInConnection implements IVideoScreenInConnection
 		this.peerConn
 			.setRemoteDescription(offer)
 			.then(() => {
+				this.peerConn.getTransceivers().forEach((transceiver) => {
+					if (!RTCRtpReceiver.getCapabilities) return;
+					const caps = RTCRtpReceiver.getCapabilities('video');
+					if (caps) {
+						const preferred = caps.codecs.filter(
+							(c) => c.mimeType === 'video/VP9' || c.mimeType === 'video/AV1'
+						);
+						const rest = caps.codecs.filter(
+							(c) => c.mimeType !== 'video/VP9' && c.mimeType !== 'video/AV1'
+						);
+						try {
+							transceiver.setCodecPreferences([...preferred, ...rest]);
+						} catch {
+							// setCodecPreferences is not supported in all browsers; continue without it
+						}
+					}
+				});
 				this.peerConn
 					.createAnswer()
 					.then((rtcSessionDesc: RTCSessionDescriptionInit) => {
@@ -44,14 +65,16 @@ export default class VideoScreenInConnection implements IVideoScreenInConnection
 							.setLocalDescription(rtcSessionDesc)
 							.then(() => {
 								if (rtcSessionDesc.sdp) {
-									MeetingsApi.createMediaAnswer(this.meetingId, rtcSessionDesc.sdp).then(() => {	
-										console.log('Media answer created successfully');
-									}).catch((reason) => console.warn('Failed to create media answer', reason));
+									MeetingsApi.createMediaAnswer(this.meetingId, rtcSessionDesc.sdp)
+										.then(() => {
+											console.log('Media answer created successfully');
+										})
+										.catch((reason) => console.warn('Failed to create media answer', reason));
 								}
 							})
 							.catch((reason) => console.warn('setLocalDescription failed', reason));
-
-					}).catch((reason) => console.warn('createAnswer failed', reason));
+					})
+					.catch((reason) => console.warn('createAnswer failed', reason));
 			})
 			.catch((reason) => console.warn('setRemoteDescription failed', reason));
 	}
@@ -100,6 +123,28 @@ export default class VideoScreenInConnection implements IVideoScreenInConnection
 			(stream) => `${stream.userId}-${stream.type}`
 		) as StreamsSubscriptionMap;
 		useStore.getState().setSubscribedTracks(this.meetingId, newStreams);
+	}
+
+	public requestLayer(userId: string, type: STREAM_TYPE, layer: string): void {
+		if (!this.subscriptionManager) return;
+		const current = this.subscriptionManager.subscriptions;
+		const updated = current.map((sub) =>
+			sub.userId === userId && sub.type === type ? { ...sub, layer } : sub
+		);
+		this.subscriptionManager.updateSubscription(updated);
+	}
+
+	public setInboundQuality(level: NetworkQualityLevel): void {
+		if (!this.subscriptionManager) return;
+		const layerByQuality: Partial<Record<NetworkQualityLevel, string>> = {
+			[NetworkQualityLevel.GOOD]: 'L3T3',
+			[NetworkQualityLevel.FAIR]: 'L2T2',
+			[NetworkQualityLevel.POOR]: 'L1T1'
+		};
+		const layer = layerByQuality[level];
+		if (!layer) return;
+		const updated = this.subscriptionManager.subscriptions.map((sub) => ({ ...sub, layer }));
+		this.subscriptionManager.updateSubscription(updated);
 	}
 
 	public closePeerConnection(): void {
