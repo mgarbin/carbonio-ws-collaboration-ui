@@ -129,6 +129,7 @@ export enum STREAM_TYPE {
 export type Subscription = {
 	userId: string;
 	type: STREAM_TYPE;
+	layer?: string;
 };
 
 export type SubscriptionMap = {

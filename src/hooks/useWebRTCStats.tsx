@@ -34,8 +34,7 @@ const computeAverageQuality = (history: RawStats[]): NetworkQualityLevel => {
 		.filter((s) => s.fractionLost !== undefined)
 		.map((s) => s.fractionLost as number);
 	const avgRtt = rtts.length > 0 ? rtts.reduce((a, b) => a + b, 0) / rtts.length : undefined;
-	const avgLoss =
-		losses.length > 0 ? losses.reduce((a, b) => a + b, 0) / losses.length : undefined;
+	const avgLoss = losses.length > 0 ? losses.reduce((a, b) => a + b, 0) / losses.length : undefined;
 	return computeQuality(avgRtt, avgLoss);
 };
 
@@ -119,6 +118,7 @@ const useWebRTCStats = (meetingId: string): void => {
 							currentMeeting?.screenOutConn
 								?.setOutboundQuality(quality)
 								.catch((err) => console.warn('Failed to set screen outbound quality', err));
+							currentMeeting?.videoScreenIn?.setInboundQuality(quality);
 						}
 					}
 				})
