@@ -150,7 +150,10 @@ export default class VideoOutConnection implements IVideoOutConnection {
 	public async setOutboundQuality(level: NetworkQualityLevel): Promise<void> {
 		if (!this.rtpSender) return;
 		const params = this.rtpSender.getParameters();
-		if (!params.encodings || params.encodings.length === 0) return;
+		if (!params.encodings || params.encodings.length === 0) {
+			console.warn('VideoOutConnection.setOutboundQuality: no encodings available');
+			return;
+		}
 
 		if (level === NetworkQualityLevel.GOOD) {
 			params.encodings = params.encodings.map((enc) => ({ ...enc, active: true }));

@@ -19,7 +19,7 @@ import {
 } from '../../types/store/ActiveMeetingTypes';
 import { MeetingsApi } from '../index';
 
-// How often to measure inbound video bitrate and adjust the simulcast layer (ms).
+// How often to measure inbound video bitrate and switch the simulcast substream based on thresholds (ms).
 const INBOUND_POLL_MS = 4000;
 // Bitrate thresholds used to select the simulcast substream.
 const INBOUND_HIGH_THRESHOLD_KBPS = 500;

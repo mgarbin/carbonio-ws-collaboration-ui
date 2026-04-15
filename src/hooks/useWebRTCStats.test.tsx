@@ -749,6 +749,22 @@ describe('quality re-application after media reconnection', () => {
 		expect((screenConn as any).peerConn).toBeNull();
 	});
 
+	test('VideoScreenInConnection.closePeerConnection clears the bandwidth tracking interval', () => {
+		const store = useStore.getState();
+		const videoScreenIn = store.activeMeeting?.videoScreenIn;
+		expect(videoScreenIn).toBeDefined();
+
+		// bandwidthPollInterval is set during construction
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		expect((videoScreenIn as any).bandwidthPollInterval).not.toBeNull();
+
+		videoScreenIn?.closePeerConnection();
+
+		// bandwidthPollInterval must be cleared to prevent leaks
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		expect((videoScreenIn as any).bandwidthPollInterval).toBeNull();
+	});
+
 	test('VideoScreenInConnection.setInboundQuality maps GOOD/FAIR/POOR to simulcast substream indices', () => {
 		const store = useStore.getState();
 		const videoScreenIn = store.activeMeeting?.videoScreenIn;
