@@ -40,6 +40,7 @@ const computeAverageQuality = (history: RawStats[]): NetworkQualityLevel => {
 
 const useWebRTCStats = (meetingId: string): void => {
 	const prevVideoBytesRef = useRef<number>(0);
+	const prevInboundVideoBytesRef = useRef<number>(0);
 	const statsHistoryRef = useRef<RawStats[]>([]);
 	const prevQualityRef = useRef<NetworkQualityLevel>(NetworkQualityLevel.UNKNOWN);
 
@@ -50,6 +51,7 @@ const useWebRTCStats = (meetingId: string): void => {
 
 			const audioConn = activeMeeting.bidirectionalAudioConn?.peerConn;
 			const videoConn = activeMeeting.videoOutConn?.peerConn;
+			const inboundVideoConn = activeMeeting.videoScreenIn?.peerConn;
 
 			const audioStatsPromise: Promise<{ rtt?: number; fractionLost?: number }> = audioConn
 				? audioConn.getStats().then((statsReport) => {
@@ -88,8 +90,32 @@ const useWebRTCStats = (meetingId: string): void => {
 					})
 				: Promise.resolve({});
 
-			Promise.all([audioStatsPromise, videoStatsPromise])
-				.then(([audioStats, videoStats]) => {
+			const prevInboundBytes = prevInboundVideoBytesRef.current;
+			const inboundVideoStatsPromise: Promise<{ inboundVideoBitrateKbps?: number }> =
+				inboundVideoConn
+					? inboundVideoConn.getStats().then((statsReport) => {
+							let totalBytes = 0;
+							statsReport.forEach((report) => {
+								if (
+									report.type === 'inbound-rtp' &&
+									(report as RTCInboundRtpStreamStats).kind === 'video'
+								) {
+									totalBytes += (report as RTCInboundRtpStreamStats).bytesReceived ?? 0;
+								}
+							});
+							let inboundVideoBitrateKbps: number | undefined;
+							if (prevInboundBytes > 0 && totalBytes >= prevInboundBytes) {
+								inboundVideoBitrateKbps = Math.round(
+									((totalBytes - prevInboundBytes) * 8) / (POLL_INTERVAL_MS / 1000) / 1000
+								);
+							}
+							prevInboundVideoBytesRef.current = totalBytes;
+							return { inboundVideoBitrateKbps };
+						})
+					: Promise.resolve({});
+
+			Promise.all([audioStatsPromise, videoStatsPromise, inboundVideoStatsPromise])
+				.then(([audioStats, videoStats, inboundVideoStats]) => {
 					const rawStats: RawStats = { rtt: audioStats.rtt, fractionLost: audioStats.fractionLost };
 					statsHistoryRef.current = [
 						...statsHistoryRef.current.slice(-(STATS_HISTORY_SIZE - 1)),
@@ -101,7 +127,8 @@ const useWebRTCStats = (meetingId: string): void => {
 						quality,
 						rtt: audioStats.rtt,
 						fractionLost: audioStats.fractionLost,
-						videoBitrateKbps: videoStats.videoBitrateKbps
+						videoBitrateKbps: videoStats.videoBitrateKbps,
+						inboundVideoBitrateKbps: inboundVideoStats.inboundVideoBitrateKbps
 					};
 					setNetworkStats(stats);
 

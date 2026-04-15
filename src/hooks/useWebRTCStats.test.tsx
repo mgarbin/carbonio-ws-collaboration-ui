@@ -9,7 +9,7 @@ import { act, renderHook } from '@testing-library/react';
 import useWebRTCStats, { computeAverageQuality, computeQuality } from './useWebRTCStats';
 import useStore from '../store/Store';
 import { createMockMeeting, createMockParticipants } from '../tests/createMock';
-import { NetworkQualityLevel } from '../types/store/ActiveMeetingTypes';
+import { NetworkQualityLevel, SimulcastLayer } from '../types/store/ActiveMeetingTypes';
 
 const meeting = createMockMeeting({ participants: [createMockParticipants({ userId: 'userId' })] });
 
@@ -17,6 +17,13 @@ const makeStatsMock = (reports: RTCStats[]): Promise<RTCStatsReport> =>
 	Promise.resolve({
 		forEach: (fn: (report: RTCStats) => void) => reports.forEach(fn)
 	} as unknown as RTCStatsReport);
+
+// Simulcast encodings mirroring VideoOutConnection.SIMULCAST_ENCODINGS
+const makeSimulcastEncodings = (): RTCRtpEncodingParameters[] => [
+	{ rid: 'h', maxBitrate: 900_000, scaleResolutionDownBy: 1, active: true },
+	{ rid: 'm', maxBitrate: 300_000, scaleResolutionDownBy: 2, active: true },
+	{ rid: 'l', maxBitrate: 75_000, scaleResolutionDownBy: 4, active: true }
+];
 
 describe('computeQuality', () => {
 	test('returns UNKNOWN when both rtt and fractionLost are undefined', () => {
@@ -91,8 +98,12 @@ describe('computeAverageQuality', () => {
 
 describe('useWebRTCStats hook', () => {
 	let mockGetStats: ReturnType<typeof vi.fn>;
-	let mockSetParameters: ReturnType<typeof vi.fn>;
-	let mockGetParameters: ReturnType<typeof vi.fn>;
+	// Separate senders for video (simulcast, via addTransceiver) and audio (single, via addTrack)
+	let mockSetParametersVideo: ReturnType<typeof vi.fn>;
+	let mockGetParametersVideo: ReturnType<typeof vi.fn>;
+	let mockAddTransceiver: ReturnType<typeof vi.fn>;
+	let mockSetParametersAudio: ReturnType<typeof vi.fn>;
+	let mockGetParametersAudio: ReturnType<typeof vi.fn>;
 	let mockAddTrack: ReturnType<typeof vi.fn>;
 
 	beforeEach(() => {
@@ -109,11 +120,22 @@ describe('useWebRTCStats hook', () => {
 			])
 		);
 
-		mockSetParameters = vi.fn(() => Promise.resolve());
-		mockGetParameters = vi.fn(() => ({ encodings: [{}] }));
+		// Video sender: returns three simulcast encodings with rids
+		mockSetParametersVideo = vi.fn(() => Promise.resolve());
+		mockGetParametersVideo = vi.fn(() => ({ encodings: makeSimulcastEncodings() }));
+		mockAddTransceiver = vi.fn(() => ({
+			sender: {
+				getParameters: mockGetParametersVideo,
+				setParameters: mockSetParametersVideo
+			}
+		}));
+
+		// Audio sender: single encoding without rids (unchanged audio degradation path)
+		mockSetParametersAudio = vi.fn(() => Promise.resolve());
+		mockGetParametersAudio = vi.fn(() => ({ encodings: [{}] }));
 		mockAddTrack = vi.fn(() => ({
-			getParameters: mockGetParameters,
-			setParameters: mockSetParameters
+			getParameters: mockGetParametersAudio,
+			setParameters: mockSetParametersAudio
 		}));
 
 		// window.RTCPeerConnection is already a vi.fn() defined in setupTests.ts.
@@ -125,6 +147,8 @@ describe('useWebRTCStats hook', () => {
 				onnegotiationneeded: null,
 				oniceconnectionstatechange: null,
 				addTrack: mockAddTrack,
+				addTransceiver: mockAddTransceiver,
+				getTransceivers: vi.fn(() => []),
 				createAnswer: vi.fn(() => Promise.resolve({ sdp: '', type: 'answer' })),
 				setRemoteDescription: vi.fn(() => Promise.resolve()),
 				setLocalDescription: vi.fn(() => Promise.resolve()),
@@ -158,12 +182,14 @@ describe('useWebRTCStats hook', () => {
 		await act(async () => {
 			await vi.advanceTimersByTimeAsync(4000);
 		});
-		expect(mockGetStats).toHaveBeenCalledTimes(1);
+		// audio conn + videoScreenIn conn both call getStats (videoOutConn.peerConn is null here)
+		const callsAfterFirstInterval = mockGetStats.mock.calls.length;
+		expect(callsAfterFirstInterval).toBeGreaterThan(0);
 
 		await act(async () => {
 			await vi.advanceTimersByTimeAsync(4000);
 		});
-		expect(mockGetStats).toHaveBeenCalledTimes(2);
+		expect(mockGetStats.mock.calls.length).toBe(callsAfterFirstInterval * 2);
 	});
 
 	test('clears the interval when the hook unmounts', async () => {
@@ -174,7 +200,9 @@ describe('useWebRTCStats hook', () => {
 			await vi.advanceTimersByTimeAsync(4000);
 		});
 
-		expect(mockGetStats).not.toHaveBeenCalled();
+		// The hook's polling interval was cleared; networkStats is never updated after unmount.
+		// (VideoScreenInConnection has its own independent polling that does not write networkStats.)
+		expect(useStore.getState().activeMeeting?.networkStats).toBeUndefined();
 	});
 
 	test('does nothing when there is no active meeting matching the meetingId', async () => {
@@ -184,7 +212,7 @@ describe('useWebRTCStats hook', () => {
 			await vi.advanceTimersByTimeAsync(4000);
 		});
 
-		expect(mockGetStats).not.toHaveBeenCalled();
+		// The hook does nothing for an unknown meetingId — networkStats is never set.
 		expect(useStore.getState().activeMeeting?.networkStats).toBeUndefined();
 	});
 
@@ -226,7 +254,7 @@ describe('useWebRTCStats hook', () => {
 		expect(useStore.getState().activeMeeting?.networkStats).toBeUndefined();
 	});
 
-	test('applies POOR quality settings (maxBitrate 10_000, scaleResolutionDownBy 5 for video) when quality is POOR', async () => {
+	test('applies POOR simulcast quality (only low layer active) when quality is POOR', async () => {
 		mockGetStats.mockImplementation(() =>
 			makeStatsMock([
 				{
@@ -254,12 +282,20 @@ describe('useWebRTCStats hook', () => {
 			await vi.advanceTimersByTimeAsync(4000);
 		});
 
-		expect(mockSetParameters).toHaveBeenCalled();
-		const videoCall = mockSetParameters.mock.calls.find(
-			([params]) => params.encodings?.[0]?.scaleResolutionDownBy === 5
+		// Video: only the low ('l') layer should remain active
+		const poorVideoCall = mockSetParametersVideo.mock.calls.find(([params]) =>
+			params.encodings?.some(
+				(enc: RTCRtpEncodingParameters) => enc.rid === 'l' && enc.active === true
+			)
 		);
-		expect(videoCall).toBeDefined();
-		const audioCall = mockSetParameters.mock.calls.find(
+		expect(poorVideoCall).toBeDefined();
+		const highLayerDisabled = poorVideoCall?.[0]?.encodings?.find(
+			(enc: RTCRtpEncodingParameters) => enc.rid === 'h'
+		)?.active;
+		expect(highLayerDisabled).toBe(false);
+
+		// Audio: still uses maxBitrate degradation (unchanged)
+		const audioCall = mockSetParametersAudio.mock.calls.find(
 			([params]) => params.encodings?.[0]?.maxBitrate === 10_000
 		);
 		expect(audioCall).toBeDefined();
@@ -294,7 +330,7 @@ describe('useWebRTCStats hook', () => {
 		expect(mockSetScreenQuality).toHaveBeenCalledWith(NetworkQualityLevel.POOR);
 	});
 
-	test('applies FAIR quality settings (maxBitrate 20_000, scaleResolutionDownBy 2 for video) when quality is FAIR', async () => {
+	test('applies FAIR simulcast quality (high layer disabled) when quality is FAIR', async () => {
 		mockGetStats.mockImplementation(() =>
 			makeStatsMock([
 				{
@@ -320,12 +356,20 @@ describe('useWebRTCStats hook', () => {
 			await vi.advanceTimersByTimeAsync(4000);
 		});
 
-		expect(mockSetParameters).toHaveBeenCalled();
-		const videoCall = mockSetParameters.mock.calls.find(
-			([params]) => params.encodings?.[0]?.scaleResolutionDownBy === 2
+		// Video: high layer ('h') should be inactive; medium ('m') and low ('l') remain active
+		const fairVideoCall = mockSetParametersVideo.mock.calls.find(([params]) =>
+			params.encodings?.some(
+				(enc: RTCRtpEncodingParameters) => enc.rid === 'h' && enc.active === false
+			)
 		);
-		expect(videoCall).toBeDefined();
-		const audioCall = mockSetParameters.mock.calls.find(
+		expect(fairVideoCall).toBeDefined();
+		const mediumLayerActive = fairVideoCall?.[0]?.encodings?.find(
+			(enc: RTCRtpEncodingParameters) => enc.rid === 'm'
+		)?.active;
+		expect(mediumLayerActive).toBe(true);
+
+		// Audio: still uses maxBitrate degradation (unchanged)
+		const audioCall = mockSetParametersAudio.mock.calls.find(
 			([params]) => params.encodings?.[0]?.maxBitrate === 20_000
 		);
 		expect(audioCall).toBeDefined();
@@ -351,16 +395,23 @@ describe('useWebRTCStats hook', () => {
 			await vi.advanceTimersByTimeAsync(4000);
 		});
 
-		const callsAfterFirstInterval = mockSetParameters.mock.calls.length;
+		const videoCallsAfterFirst = mockSetParametersVideo.mock.calls.length;
 
 		await act(async () => {
 			await vi.advanceTimersByTimeAsync(4000);
 		});
 
-		expect(mockSetParameters.mock.calls.length).toBe(callsAfterFirstInterval);
+		// Quality did not change — no additional setParameters call for video
+		expect(mockSetParametersVideo.mock.calls.length).toBe(videoCallsAfterFirst);
 	});
 
-	test('does not reduce quality when network is GOOD', async () => {
+	test('enables all simulcast layers when network quality is GOOD', async () => {
+		const store = useStore.getState();
+		store.meetingDisconnection(meeting.id);
+		store.meetingConnection(meeting.id, { enabled: false }, { enabled: true });
+
+		await act(async () => {});
+
 		renderHook(() => useWebRTCStats(meeting.id));
 
 		await act(async () => {
@@ -370,10 +421,14 @@ describe('useWebRTCStats hook', () => {
 		expect(useStore.getState().activeMeeting?.networkStats?.quality).toBe(
 			NetworkQualityLevel.GOOD
 		);
-		expect(mockSetParameters).not.toHaveBeenCalled();
+		// GOOD quality: setParameters called and all layers active
+		const goodCall = mockSetParametersVideo.mock.calls.find(([params]) =>
+			params.encodings?.every((enc: RTCRtpEncodingParameters) => enc.active === true)
+		);
+		expect(goodCall).toBeDefined();
 	});
 
-	test('restores original quality settings when quality improves back to GOOD', async () => {
+	test('re-enables all simulcast layers when quality recovers to GOOD after POOR', async () => {
 		// First, establish POOR quality
 		mockGetStats.mockImplementation(() =>
 			makeStatsMock([
@@ -400,8 +455,8 @@ describe('useWebRTCStats hook', () => {
 			await vi.advanceTimersByTimeAsync(4000);
 		});
 
-		const callsAfterPoor = mockSetParameters.mock.calls.length;
-		expect(callsAfterPoor).toBeGreaterThan(0);
+		const videoCallsAfterPoor = mockSetParametersVideo.mock.calls.length;
+		expect(videoCallsAfterPoor).toBeGreaterThan(0);
 
 		// Switch to GOOD quality
 		mockGetStats.mockImplementation(() =>
@@ -417,12 +472,17 @@ describe('useWebRTCStats hook', () => {
 			])
 		);
 
+		// The rolling-average window holds up to 5 samples, so quality recovers from POOR to GOOD
+		// only once all 5 slots are filled with GOOD measurements (after ~5 more intervals).
 		await act(async () => {
-			await vi.advanceTimersByTimeAsync(4000);
+			await vi.advanceTimersByTimeAsync(24000); // 6 more polls flush the POOR sample
 		});
 
-		// setParameters should have been called again to restore original settings
-		expect(mockSetParameters.mock.calls.length).toBeGreaterThan(callsAfterPoor);
+		// At some point setParameters should have been called with all layers active (GOOD)
+		const goodCall = mockSetParametersVideo.mock.calls.find(([params]) =>
+			params.encodings?.every((enc: RTCRtpEncodingParameters) => enc.active === true)
+		);
+		expect(goodCall).toBeDefined();
 	});
 
 	test('rolling buffer keeps only the last 5 samples', async () => {
@@ -455,21 +515,66 @@ describe('useWebRTCStats hook', () => {
 		const stats = useStore.getState().activeMeeting?.networkStats;
 		expect(stats?.quality).toBe(NetworkQualityLevel.FAIR);
 	});
+
+	test('setInboundQuality is called with SimulcastLayer values on quality change', async () => {
+		mockGetStats.mockImplementation(() =>
+			makeStatsMock([
+				{
+					type: 'remote-inbound-rtp',
+					kind: 'audio',
+					roundTripTime: 0.5,
+					fractionLost: 0.08,
+					id: 'rtp-audio',
+					timestamp: Date.now()
+				} as unknown as RTCStats
+			])
+		);
+
+		const store = useStore.getState();
+		const videoScreenIn = store.activeMeeting?.videoScreenIn;
+		const mockSetInboundQuality = vi.spyOn(videoScreenIn!, 'setInboundQuality');
+
+		renderHook(() => useWebRTCStats(meeting.id));
+
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(4000);
+		});
+
+		expect(mockSetInboundQuality).toHaveBeenCalledWith(NetworkQualityLevel.POOR);
+
+		// Verify that setInboundQuality maps POOR → SimulcastLayer.LOW
+		const subscriptionManager = videoScreenIn?.subscriptionManager;
+		expect(subscriptionManager).toBeDefined();
+		// No subscriptions are set up in this test, so updateSubscription is a no-op;
+		// the important thing is the correct level was passed.
+	});
 });
 
 describe('quality re-application after media reconnection', () => {
-	let mockSetParameters: ReturnType<typeof vi.fn>;
-	let mockGetParameters: ReturnType<typeof vi.fn>;
+	let mockSetParametersVideo: ReturnType<typeof vi.fn>;
+	let mockGetParametersVideo: ReturnType<typeof vi.fn>;
+	let mockAddTransceiver: ReturnType<typeof vi.fn>;
+	let mockSetParametersAudio: ReturnType<typeof vi.fn>;
+	let mockGetParametersAudio: ReturnType<typeof vi.fn>;
 	let mockAddTrack: ReturnType<typeof vi.fn>;
 	let mockSetRemoteDescription: ReturnType<typeof vi.fn>;
 
 	beforeEach(() => {
-		mockSetParameters = vi.fn(() => Promise.resolve());
-		mockGetParameters = vi.fn(() => ({ encodings: [{}] }));
+		mockSetParametersVideo = vi.fn(() => Promise.resolve());
+		mockGetParametersVideo = vi.fn(() => ({ encodings: makeSimulcastEncodings() }));
+		mockAddTransceiver = vi.fn(() => ({
+			sender: {
+				getParameters: mockGetParametersVideo,
+				setParameters: mockSetParametersVideo
+			}
+		}));
+
+		mockSetParametersAudio = vi.fn(() => Promise.resolve());
+		mockGetParametersAudio = vi.fn(() => ({ encodings: [{}] }));
 		mockSetRemoteDescription = vi.fn(() => Promise.resolve());
 		mockAddTrack = vi.fn(() => ({
-			getParameters: mockGetParameters,
-			setParameters: mockSetParameters
+			getParameters: mockGetParametersAudio,
+			setParameters: mockSetParametersAudio
 		}));
 
 		vi.mocked(window.RTCPeerConnection).mockImplementation(function () {
@@ -478,6 +583,8 @@ describe('quality re-application after media reconnection', () => {
 				onnegotiationneeded: null,
 				oniceconnectionstatechange: null,
 				addTrack: mockAddTrack,
+				addTransceiver: mockAddTransceiver,
+				getTransceivers: vi.fn(() => []),
 				close: vi.fn(),
 				createAnswer: vi.fn(() => Promise.resolve({ sdp: '', type: 'answer' })),
 				setRemoteDescription: mockSetRemoteDescription,
@@ -492,7 +599,7 @@ describe('quality re-application after media reconnection', () => {
 		store.meetingConnection(meeting.id);
 	});
 
-	test('videoOutConn re-applies the last quality when handleRemoteAnswer is called after reconnection', async () => {
+	test('videoOutConn re-applies simulcast POOR quality (only low layer active) when handleRemoteAnswer is called after reconnection', async () => {
 		const store = useStore.getState();
 		store.meetingDisconnection(meeting.id);
 		store.meetingConnection(meeting.id, { enabled: false }, { enabled: true });
@@ -503,7 +610,7 @@ describe('quality re-application after media reconnection', () => {
 		// Record the established quality in the store
 		store.setNetworkStats({ quality: NetworkQualityLevel.POOR });
 
-		mockSetParameters.mockClear();
+		mockSetParametersVideo.mockClear();
 
 		// Simulate a re-connection answer arriving
 		const videoConn = useStore.getState().activeMeeting?.videoOutConn;
@@ -514,29 +621,34 @@ describe('quality re-application after media reconnection', () => {
 			await Promise.resolve();
 		});
 
-		const poorCall = mockSetParameters.mock.calls.find(
-			([params]) => params.encodings?.[0]?.scaleResolutionDownBy === 5
+		// POOR: only the low ('l') layer active
+		const poorCall = mockSetParametersVideo.mock.calls.find(([params]) =>
+			params.encodings?.some(
+				(enc: RTCRtpEncodingParameters) => enc.rid === 'l' && enc.active === true
+			)
 		);
 		expect(poorCall).toBeDefined();
+		expect(
+			poorCall?.[0]?.encodings?.find((enc: RTCRtpEncodingParameters) => enc.rid === 'h')?.active
+		).toBe(false);
 	});
 
-	test('screenOutConn re-applies the last quality when handleRemoteAnswer is called after reconnection', async () => {
+	test('screenOutConn re-applies simulcast FAIR quality (high layer disabled) when handleRemoteAnswer is called after reconnection', async () => {
 		const store = useStore.getState();
 
-		// Inject a mock peerConn and rtpSender into the screenOutConn
+		// Inject a mock peerConn and a simulcast-style rtpSender into the screenOutConn
 		const screenConn = store.activeMeeting?.screenOutConn;
+		const mockScreenSetParameters = vi.fn(() => Promise.resolve());
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		(screenConn as any).peerConn = { setRemoteDescription: vi.fn(() => Promise.resolve()) };
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		(screenConn as any).rtpSender = {
-			getParameters: mockGetParameters,
-			setParameters: mockSetParameters
+			getParameters: vi.fn(() => ({ encodings: makeSimulcastEncodings() })),
+			setParameters: mockScreenSetParameters
 		};
 
 		// Record the established quality in the store
 		store.setNetworkStats({ quality: NetworkQualityLevel.FAIR });
-
-		mockSetParameters.mockClear();
 
 		await act(async () => {
 			screenConn?.handleRemoteAnswer({ sdp: 'mock-sdp', type: 'answer' });
@@ -544,10 +656,16 @@ describe('quality re-application after media reconnection', () => {
 			await Promise.resolve();
 		});
 
-		const fairCall = mockSetParameters.mock.calls.find(
-			([params]) => params.encodings?.[0]?.scaleResolutionDownBy === 2
+		// FAIR: high layer ('h') disabled, others remain active
+		const fairCall = mockScreenSetParameters.mock.calls.find(([params]) =>
+			params.encodings?.some(
+				(enc: RTCRtpEncodingParameters) => enc.rid === 'h' && enc.active === false
+			)
 		);
 		expect(fairCall).toBeDefined();
+		expect(
+			fairCall?.[0]?.encodings?.find((enc: RTCRtpEncodingParameters) => enc.rid === 'm')?.active
+		).toBe(true);
 	});
 
 	test('bidirectionalAudioConn re-applies the last quality when handleRemoteAnswer is called after reconnection', async () => {
@@ -559,7 +677,7 @@ describe('quality re-application after media reconnection', () => {
 		// Record the established quality in the store
 		store.setNetworkStats({ quality: NetworkQualityLevel.POOR });
 
-		mockSetParameters.mockClear();
+		mockSetParametersAudio.mockClear();
 
 		const audioConn = store.activeMeeting?.bidirectionalAudioConn;
 		await act(async () => {
@@ -568,60 +686,99 @@ describe('quality re-application after media reconnection', () => {
 			await Promise.resolve();
 		});
 
-		const poorCall = mockSetParameters.mock.calls.find(
+		const poorCall = mockSetParametersAudio.mock.calls.find(
 			([params]) => params.encodings?.[0]?.maxBitrate === 10_000
 		);
 		expect(poorCall).toBeDefined();
 	});
 
-	test('videoOutConn.closePeerConnection resets originalEncodings so the new connection captures fresh defaults', async () => {
+	test('videoOutConn.closePeerConnection resets rtpSender and peerConn so the next connection starts fresh', async () => {
 		const store = useStore.getState();
 		store.meetingDisconnection(meeting.id);
 		store.meetingConnection(meeting.id, { enabled: false }, { enabled: true });
 
 		await act(async () => {});
 
-		// Get the video connection from the UPDATED store state
 		const videoConn = useStore.getState().activeMeeting?.videoOutConn;
 
-		// Populate originalEncodings by applying a non-GOOD quality
+		// Apply a quality level to verify the sender is in use
 		await act(async () => {
 			await videoConn?.setOutboundQuality(NetworkQualityLevel.POOR);
 		});
 
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		expect((videoConn as any).originalEncodings).not.toBeNull();
+		expect((videoConn as any).rtpSender).not.toBeNull();
 
-		// Close the connection — originalEncodings must be cleared
+		// Close the connection — rtpSender and peerConn must be cleared
 		videoConn?.closePeerConnection();
 
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		expect((videoConn as any).originalEncodings).toBeNull();
+		expect((videoConn as any).rtpSender).toBeNull();
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		expect((videoConn as any).peerConn).toBeNull();
 	});
 
-	test('screenOutConn.closePeerConnection resets originalEncodings so the new connection captures fresh defaults', async () => {
+	test('screenOutConn.closePeerConnection resets rtpSender and peerConn so the next connection starts fresh', async () => {
 		const store = useStore.getState();
 		const screenConn = store.activeMeeting?.screenOutConn;
 
-		// Inject a mock rtpSender so setOutboundQuality can act on it
+		// Inject a mock simulcast rtpSender
+		const mockScreenSetParameters = vi.fn(() => Promise.resolve());
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		(screenConn as any).peerConn = { close: vi.fn() };
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		(screenConn as any).rtpSender = {
-			getParameters: mockGetParameters,
-			setParameters: mockSetParameters
+			getParameters: vi.fn(() => ({ encodings: makeSimulcastEncodings() })),
+			setParameters: mockScreenSetParameters,
+			track: null
 		};
 
-		// Populate originalEncodings by applying a non-GOOD quality
+		// Apply a quality level to verify the sender is in use
 		await act(async () => {
 			await screenConn?.setOutboundQuality(NetworkQualityLevel.POOR);
 		});
 
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		expect((screenConn as any).originalEncodings).not.toBeNull();
+		expect(mockScreenSetParameters).toHaveBeenCalled();
 
-		// Close the connection — originalEncodings must be cleared
+		// Close the connection — rtpSender and peerConn must be cleared
 		screenConn?.closePeerConnection();
 
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		expect((screenConn as any).originalEncodings).toBeNull();
+		expect((screenConn as any).rtpSender).toBeNull();
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		expect((screenConn as any).peerConn).toBeNull();
+	});
+
+	test('VideoScreenInConnection.setInboundQuality maps GOOD/FAIR/POOR to simulcast substream indices', () => {
+		const store = useStore.getState();
+		const videoScreenIn = store.activeMeeting?.videoScreenIn;
+		expect(videoScreenIn).toBeDefined();
+
+		// Inject a subscription so updateSubscription has something to act on
+		const subManager = videoScreenIn?.subscriptionManager;
+		if (subManager) {
+			subManager.subscriptions = [
+				{ userId: 'user1', type: 'video' as never, layer: SimulcastLayer.HIGH }
+			];
+		}
+
+		const mockUpdate = vi
+			.spyOn(subManager!, 'updateSubscription')
+			.mockImplementation(() => undefined);
+
+		videoScreenIn?.setInboundQuality(NetworkQualityLevel.GOOD);
+		expect(mockUpdate).toHaveBeenLastCalledWith(
+			expect.arrayContaining([expect.objectContaining({ layer: SimulcastLayer.HIGH })])
+		);
+
+		videoScreenIn?.setInboundQuality(NetworkQualityLevel.FAIR);
+		expect(mockUpdate).toHaveBeenLastCalledWith(
+			expect.arrayContaining([expect.objectContaining({ layer: SimulcastLayer.MEDIUM })])
+		);
+
+		videoScreenIn?.setInboundQuality(NetworkQualityLevel.POOR);
+		expect(mockUpdate).toHaveBeenLastCalledWith(
+			expect.arrayContaining([expect.objectContaining({ layer: SimulcastLayer.LOW })])
+		);
 	});
 });

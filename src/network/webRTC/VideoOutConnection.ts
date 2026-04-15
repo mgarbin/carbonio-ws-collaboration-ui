@@ -11,6 +11,14 @@ import { NetworkQualityLevel, STREAM_TYPE } from '../../types/store/ActiveMeetin
 import { getVideoStream } from '../../utils/UserMediaManager';
 import MeetingsApi from '../apis/MeetingsApi';
 
+// VP8 simulcast encodings sent by the publisher.
+// Three spatial layers: full resolution (h), half (m), quarter (l).
+const SIMULCAST_ENCODINGS: RTCRtpEncodingParameters[] = [
+	{ rid: 'h', maxBitrate: 900_000, scaleResolutionDownBy: 1 },
+	{ rid: 'm', maxBitrate: 300_000, scaleResolutionDownBy: 2 },
+	{ rid: 'l', maxBitrate: 75_000, scaleResolutionDownBy: 4 }
+];
+
 export default class VideoOutConnection implements IVideoOutConnection {
 	peerConn: RTCPeerConnection | null;
 
@@ -19,8 +27,6 @@ export default class VideoOutConnection implements IVideoOutConnection {
 	rtpSender: RTCRtpSender | null;
 
 	selectedVideoDeviceId: string | undefined;
-
-	private originalEncodings: RTCRtpEncodingParameters[] | null = null;
 
 	constructor(meetingId: string, videoStreamEnabled: boolean, selectedVideoDeviceId?: string) {
 		this.peerConn = null;
@@ -85,7 +91,7 @@ export default class VideoOutConnection implements IVideoOutConnection {
 		}
 	};
 
-	// Stop the old track and add the new one without a new renegotiation
+	// Add a simulcast transceiver for the initial track, or replace the track on an existing sender.
 	public updateLocalStreamTrack(
 		mediaStreamTrack: MediaStream,
 		isVirtualBackground?: boolean
@@ -94,10 +100,11 @@ export default class VideoOutConnection implements IVideoOutConnection {
 			const videoTrack: MediaStreamTrack = mediaStreamTrack.getVideoTracks()[0];
 			if (this.peerConn) {
 				if (this.rtpSender == null) {
-					this.rtpSender = this.peerConn?.addTrack(
-						videoTrack,
-						mediaStreamTrack ?? new MediaStream()
-					);
+					const transceiver = this.peerConn.addTransceiver(videoTrack, {
+						direction: 'sendonly',
+						sendEncodings: SIMULCAST_ENCODINGS
+					});
+					this.rtpSender = transceiver.sender;
 				} else if (this.rtpSender?.track) {
 					if (isVirtualBackground) {
 						this.rtpSender.replaceTrack(videoTrack).catch((reason) => console.warn(reason));
@@ -134,36 +141,23 @@ export default class VideoOutConnection implements IVideoOutConnection {
 		this.peerConn?.close();
 		this.rtpSender = null;
 		this.peerConn = null;
-		this.originalEncodings = null;
 	}
 
+	// Enable or disable simulcast layers based on available bandwidth.
+	// GOOD  → all three layers active (h / m / l)
+	// FAIR  → disable the high layer (rid 'h') to reduce bitrate
+	// POOR  → keep only the low layer (rid 'l') to minimise bandwidth
 	public async setOutboundQuality(level: NetworkQualityLevel): Promise<void> {
 		if (!this.rtpSender) return;
 		const params = this.rtpSender.getParameters();
-		if (!params.encodings || params.encodings.length === 0) {
-			params.encodings = [{}];
-		}
-
-		if (level === NetworkQualityLevel.GOOD && this.originalEncodings === null) return;
-
-		if (this.originalEncodings === null) {
-			this.originalEncodings = params.encodings.map((enc) => ({ ...enc }));
-		}
+		if (!params.encodings || params.encodings.length === 0) return;
 
 		if (level === NetworkQualityLevel.GOOD) {
-			params.encodings = this.originalEncodings.map((enc) => ({ ...enc }));
+			params.encodings = params.encodings.map((enc) => ({ ...enc, active: true }));
 		} else if (level === NetworkQualityLevel.FAIR) {
-			params.encodings = this.originalEncodings.map((enc) => ({
-				...enc,
-				maxBitrate: 20_000, // bps
-				scaleResolutionDownBy: (enc.scaleResolutionDownBy ?? 1) * 2
-			}));
+			params.encodings = params.encodings.map((enc) => ({ ...enc, active: enc.rid !== 'h' }));
 		} else if (level === NetworkQualityLevel.POOR) {
-			params.encodings = this.originalEncodings.map((enc) => ({
-				...enc,
-				maxBitrate: 10_000, // bps
-				scaleResolutionDownBy: (enc.scaleResolutionDownBy ?? 1) * 5
-			}));
+			params.encodings = params.encodings.map((enc) => ({ ...enc, active: enc.rid === 'l' }));
 		} else {
 			return;
 		}

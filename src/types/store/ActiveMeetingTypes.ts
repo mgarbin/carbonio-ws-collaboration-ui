@@ -18,11 +18,18 @@ export enum NetworkQualityLevel {
 	POOR = 'poor'
 }
 
+export enum SimulcastLayer {
+	HIGH = '2',
+	MEDIUM = '1',
+	LOW = '0'
+}
+
 export type NetworkStats = {
 	quality: NetworkQualityLevel;
 	rtt?: number;
 	fractionLost?: number;
 	videoBitrateKbps?: number;
+	inboundVideoBitrateKbps?: number;
 };
 
 export type ActiveMeetingSlice = {

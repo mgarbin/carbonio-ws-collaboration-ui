@@ -11,14 +11,20 @@ import { NetworkQualityLevel, STREAM_TYPE } from '../../types/store/ActiveMeetin
 import { getScreenStream } from '../../utils/UserMediaManager';
 import MeetingsApi from '../apis/MeetingsApi';
 
+// VP8 simulcast encodings for screen-share.
+// Screen content benefits from higher base bitrate; layers scale 1× / 2× / 4×.
+const SCREEN_SIMULCAST_ENCODINGS: RTCRtpEncodingParameters[] = [
+	{ rid: 'h', maxBitrate: 1_500_000, scaleResolutionDownBy: 1 },
+	{ rid: 'm', maxBitrate: 500_000, scaleResolutionDownBy: 2 },
+	{ rid: 'l', maxBitrate: 150_000, scaleResolutionDownBy: 4 }
+];
+
 export default class ScreenOutConnection implements IScreenOutConnection {
 	peerConn: RTCPeerConnection | null;
 
 	meetingId: string;
 
 	rtpSender: RTCRtpSender | null;
-
-	private originalEncodings: RTCRtpEncodingParameters[] | null = null;
 
 	constructor(meetingId: string) {
 		this.peerConn = null;
@@ -56,15 +62,37 @@ export default class ScreenOutConnection implements IScreenOutConnection {
 		}
 	};
 
+	// Returns true when the browser advertises VP8 codec support, which is required for simulcast.
+	private static supportsSimulcast(): boolean {
+		try {
+			return (
+				RTCRtpSender.getCapabilities?.('video')?.codecs.some(
+					(c) => c.mimeType === 'video/VP8'
+				) === true
+			);
+		} catch {
+			return false;
+		}
+	}
+
 	private updateLocalStreamTrack(mediaStreamTrack: MediaStream): Promise<MediaStreamTrack> {
 		return new Promise((resolve) => {
 			const videoTrack: MediaStreamTrack = mediaStreamTrack.getVideoTracks()[0];
 			if (this.peerConn) {
 				if (this.rtpSender == null) {
-					this.rtpSender = this.peerConn.addTrack(
-						videoTrack,
-						mediaStreamTrack ?? new MediaStream()
-					);
+					if (ScreenOutConnection.supportsSimulcast()) {
+						const transceiver = this.peerConn.addTransceiver(videoTrack, {
+							direction: 'sendonly',
+							sendEncodings: SCREEN_SIMULCAST_ENCODINGS
+						});
+						this.rtpSender = transceiver.sender;
+					} else {
+						// Fallback for environments without VP8 simulcast support
+						this.rtpSender = this.peerConn.addTrack(
+							videoTrack,
+							mediaStreamTrack ?? new MediaStream()
+						);
+					}
 				} else if (this.rtpSender?.track) {
 					this.rtpSender.track.stop();
 					this.rtpSender.replaceTrack(videoTrack).catch((reason) => console.warn(reason));
@@ -113,36 +141,23 @@ export default class ScreenOutConnection implements IScreenOutConnection {
 		this.peerConn?.close();
 		this.peerConn = null;
 		this.rtpSender = null;
-		this.originalEncodings = null;
 	}
 
+	// Enable or disable simulcast layers based on available bandwidth.
+	// GOOD  → all three layers active (h / m / l)
+	// FAIR  → disable the high layer (rid 'h') to reduce bitrate
+	// POOR  → keep only the low layer (rid 'l') to minimise bandwidth
 	public async setOutboundQuality(level: NetworkQualityLevel): Promise<void> {
 		if (!this.rtpSender) return;
 		const params = this.rtpSender.getParameters();
-		if (!params.encodings || params.encodings.length === 0) {
-			params.encodings = [{}];
-		}
-
-		if (level === NetworkQualityLevel.GOOD && this.originalEncodings === null) return;
-
-		if (this.originalEncodings === null) {
-			this.originalEncodings = params.encodings.map((enc) => ({ ...enc }));
-		}
+		if (!params.encodings || params.encodings.length === 0) return;
 
 		if (level === NetworkQualityLevel.GOOD) {
-			params.encodings = this.originalEncodings.map((enc) => ({ ...enc }));
+			params.encodings = params.encodings.map((enc) => ({ ...enc, active: true }));
 		} else if (level === NetworkQualityLevel.FAIR) {
-			params.encodings = this.originalEncodings.map((enc) => ({
-				...enc,
-				maxBitrate: 20_000, // bps
-				scaleResolutionDownBy: (enc.scaleResolutionDownBy ?? 1) * 2
-			}));
+			params.encodings = params.encodings.map((enc) => ({ ...enc, active: enc.rid !== 'h' }));
 		} else if (level === NetworkQualityLevel.POOR) {
-			params.encodings = this.originalEncodings.map((enc) => ({
-				...enc,
-				maxBitrate: 10_000, // bps
-				scaleResolutionDownBy: (enc.scaleResolutionDownBy ?? 1) * 5
-			}));
+			params.encodings = params.encodings.map((enc) => ({ ...enc, active: enc.rid === 'l' }));
 		} else {
 			return;
 		}
